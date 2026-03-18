@@ -243,7 +243,7 @@ function TabPricing({ params }) {
   const fullAmt = precioSugeridoCLP * (params.mlFull / 100);
   const adsAmt = precioSugeridoCLP * (params.mlAds / 100);
   const margenAmt = precioSugeridoCLP * (params.margenObjetivo / 100);
-  const multiplicador = precioSugeridoCLP / (prod.precioAli * params.usdClp);
+  const multiplicador = precioMinCLP / (prod.precioAli * params.usdClp);
 
   const breakdown = [
     { label: "Producto Alibaba", clp: precioUnitUSD * params.usdClp, color: "#378ADD", note: "" },
