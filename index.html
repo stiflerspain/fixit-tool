@@ -1,0 +1,641 @@
+import { useState, useCallback, useEffect } from "react";
+
+const DEFAULT_PARAMS = {
+  usdClp: 950, arancel: 6, arancelActivo: true, iva: 19, ivaActivo: true,
+  ivaRecuperable: true, dhlFee: 35, mlComision: 27.6, mlFull: 2.3,
+  mlAds: 16, margenObjetivo: 35,
+};
+
+const TABS = [
+  { id: "pricing", label: "Calculadora" },
+  { id: "dashboard", label: "Dashboard" },
+  { id: "comparador", label: "Aliexpress vs Alibaba" },
+  { id: "escalamiento", label: "¿Cuándo escalo?" },
+  { id: "publicidad", label: "Publicidad" },
+];
+
+const fmt = (n, d = 0) => isNaN(n) || !isFinite(n) ? "—" : Math.round(n).toLocaleString("es-CL", { minimumFractionDigits: d, maximumFractionDigits: d });
+const pct = (n) => isNaN(n) || !isFinite(n) ? "—" : n.toFixed(1) + "%";
+
+const S = {
+  card: { background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", padding: "1rem 1.25rem", marginBottom: "1rem" },
+  mc: { background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "0.85rem 1rem" },
+  label: { fontSize: 11, color: "var(--color-text-secondary)", margin: "0 0 4px", textTransform: "uppercase", letterSpacing: "0.06em" },
+  val: { fontSize: 22, fontWeight: 500, margin: 0, color: "var(--color-text-primary)" },
+  sub: { fontSize: 11, color: "var(--color-text-tertiary)", margin: "3px 0 0" },
+  row: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 13 },
+  sectionLabel: { fontSize: 11, color: "var(--color-text-tertiary)", textTransform: "uppercase", letterSpacing: "0.07em", margin: "0 0 10px" },
+  pill: (c) => ({ fontSize: 11, padding: "2px 9px", borderRadius: 100, display: "inline-block", fontWeight: 500, background: `var(--color-background-${c})`, color: `var(--color-text-${c})` }),
+  alert: (c) => ({ padding: "10px 14px", borderRadius: "var(--border-radius-md)", marginBottom: 8, background: `var(--color-background-${c})` }),
+  input: { background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", color: "var(--color-text-primary)", fontSize: 14, fontFamily: "inherit", padding: "7px 10px", outline: "none", width: "100%", boxSizing: "border-box" },
+  divider: { border: "none", borderTop: "0.5px solid var(--color-border-tertiary)", margin: "0.85rem 0" },
+};
+
+function Field({ label, value, onChange, unit, hint, type = "number" }) {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>{label}</span>
+        {hint && <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>{hint}</span>}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <input type={type} value={value} onChange={(e) => onChange(type === "number" ? parseFloat(e.target.value) || 0 : e.target.value)} style={S.input} />
+        {unit && <span style={{ fontSize: 12, color: "var(--color-text-tertiary)", whiteSpace: "nowrap" }}>{unit}</span>}
+      </div>
+    </div>
+  );
+}
+
+function Toggle({ label, value, onChange }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+      <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>{label}</span>
+      <button onClick={() => onChange(!value)} style={{ background: value ? "var(--color-background-success)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "3px 12px", fontSize: 12, color: value ? "var(--color-text-success)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>
+        {value ? "Sí" : "No"}
+      </button>
+    </div>
+  );
+}
+
+function UsdClpField({ params, setParams }) {
+  const [status, setStatus] = useState("idle");
+  const [autoRate, setAutoRate] = useState(null);
+  const [autoDate, setAutoDate] = useState(null);
+  const [manualMode, setManualMode] = useState(false);
+
+  const fetchRate = useCallback(async () => {
+    setStatus("loading");
+    try {
+      const res = await fetch("https://api.frankfurter.dev/v1/latest?base=USD&symbols=CLP");
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      const rate = Math.round(data.rates.CLP);
+      setAutoRate(rate); setAutoDate(data.date);
+      if (!manualMode) setParams(p => ({ ...p, usdClp: rate }));
+      setStatus("ok");
+    } catch { setStatus("error"); }
+  }, [manualMode, setParams]);
+
+  useEffect(() => { fetchRate(); }, []);
+
+  return (
+    <div style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "10px 12px", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>USD → CLP</span>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {status === "loading" && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>obteniendo...</span>}
+          {status === "ok" && !manualMode && <span style={{ fontSize: 10, color: "var(--color-text-success)" }}>auto · {autoDate}</span>}
+          {status === "error" && <span style={{ fontSize: 10, color: "var(--color-text-danger)" }}>sin conexión</span>}
+          {manualMode && <span style={{ fontSize: 10, color: "var(--color-text-warning)" }}>editado manualmente</span>}
+          {manualMode && autoRate && (
+            <button onClick={() => { setManualMode(false); if (autoRate) setParams(p => ({ ...p, usdClp: autoRate })); }} style={{ fontSize: 10, padding: "1px 7px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, cursor: "pointer", color: "var(--color-text-secondary)", fontFamily: "inherit" }}>restablecer auto</button>
+          )}
+          <button onClick={fetchRate} style={{ fontSize: 10, padding: "1px 7px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, cursor: "pointer", color: "var(--color-text-secondary)", fontFamily: "inherit" }}>↻</button>
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <input type="number" value={params.usdClp} onChange={(e) => { setManualMode(true); setParams(p => ({ ...p, usdClp: parseFloat(e.target.value) || 0 })); }} style={{ ...S.input, fontSize: 18, fontWeight: 500 }} />
+        <span style={{ fontSize: 12, color: "var(--color-text-tertiary)", whiteSpace: "nowrap" }}>CLP</span>
+      </div>
+      {autoRate && manualMode && <p style={{ fontSize: 10, color: "var(--color-text-tertiary)", margin: "4px 0 0" }}>Valor automático: ${autoRate.toLocaleString("es-CL")} ({autoDate})</p>}
+    </div>
+  );
+}
+
+function ParamsPanel({ params, setParams }) {
+  const set = (k, v) => setParams(p => ({ ...p, [k]: v }));
+  return (
+    <div style={{ ...S.card, marginBottom: 0 }}>
+      <p style={S.sectionLabel}>parámetros globales</p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 16 }}>
+        <div>
+          <p style={{ ...S.sectionLabel, marginBottom: 8 }}>importación</p>
+          <UsdClpField params={params} setParams={setParams} />
+          <Field label="Honorarios DHL" value={params.dhlFee} onChange={v => set("dhlFee", v)} unit="USD" hint="Por despacho, fuera del CIF" />
+          <div style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "10px 12px", marginTop: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Arancel aduanero</span>
+              <button onClick={() => set("arancelActivo", !params.arancelActivo)} style={{ background: params.arancelActivo ? "var(--color-background-success)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "2px 10px", fontSize: 11, color: params.arancelActivo ? "var(--color-text-success)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>{params.arancelActivo ? "activo" : "inactivo"}</button>
+            </div>
+            {params.arancelActivo ? <Field label="" value={params.arancel} onChange={v => set("arancel", v)} unit="% sobre CIF" hint="Default 6% · TLC China: 0%" /> : <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: 0 }}>No se aplica arancel (ej. TLC Chile-China)</p>}
+          </div>
+          <div style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "10px 12px", marginTop: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>IVA importación</span>
+              <button onClick={() => set("ivaActivo", !params.ivaActivo)} style={{ background: params.ivaActivo ? "var(--color-background-success)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "2px 10px", fontSize: 11, color: params.ivaActivo ? "var(--color-text-success)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>{params.ivaActivo ? "activo" : "inactivo"}</button>
+            </div>
+            {params.ivaActivo ? (
+              <>
+                <Field label="" value={params.iva} onChange={v => set("iva", v)} unit="% sobre CIF + arancel" hint="Default 19%" />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
+                  <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>¿Es recuperable? (empresa con RUT)</span>
+                  <button onClick={() => set("ivaRecuperable", !params.ivaRecuperable)} style={{ background: params.ivaRecuperable ? "var(--color-background-info)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "2px 10px", fontSize: 11, color: params.ivaRecuperable ? "var(--color-text-info)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>{params.ivaRecuperable ? "sí — crédito fiscal" : "no — es costo"}</button>
+                </div>
+              </>
+            ) : <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: 0 }}>No se aplica IVA de importación</p>}
+          </div>
+        </div>
+        <div>
+          <p style={{ ...S.sectionLabel, marginBottom: 8 }}>mercado libre</p>
+          <Field label="Comisión ML" value={params.mlComision} onChange={v => set("mlComision", v)} unit="%" />
+          <Field label="Full ML" value={params.mlFull} onChange={v => set("mlFull", v)} unit="%" />
+          <Field label="% Publicidad" value={params.mlAds} onChange={v => set("mlAds", v)} unit="%" />
+          <Field label="Margen objetivo" value={params.margenObjetivo} onChange={v => set("margenObjetivo", v)} unit="%" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TabPricing({ params }) {
+  const [prod, setProd] = useState({ nombre: "Nuevo producto", precioAli: 5, unidades: 50, flete: 80 });
+  const set = (k, v) => setProd(p => ({ ...p, [k]: v }));
+  const u = prod.unidades || 1;
+  const precioUnitUSD = prod.precioAli, fleteUnitUSD = prod.flete / u;
+  const cifUSD = precioUnitUSD + fleteUnitUSD, cifCLP = cifUSD * params.usdClp;
+  const arancelCLP = params.arancelActivo ? cifCLP * (params.arancel / 100) : 0;
+  const ivaBaseCLP = params.ivaActivo ? (cifCLP + arancelCLP) * (params.iva / 100) : 0;
+  const ivaCostoCLP = (params.ivaActivo && !params.ivaRecuperable) ? ivaBaseCLP : 0;
+  const dhlUnitCLP = (params.dhlFee / u) * params.usdClp;
+  const costoBodegaCLP = cifCLP + arancelCLP + ivaCostoCLP + dhlUnitCLP;
+  const deductions = (params.mlComision + params.mlFull + params.mlAds + params.margenObjetivo) / 100;
+  const precioSugeridoCLP = costoBodegaCLP / (1 - deductions);
+  const precioMinCLP = costoBodegaCLP / (1 - (params.mlComision + params.mlFull) / 100);
+  const comisionAmt = precioSugeridoCLP * (params.mlComision / 100);
+  const fullAmt = precioSugeridoCLP * (params.mlFull / 100);
+  const adsAmt = precioSugeridoCLP * (params.mlAds / 100);
+  const margenAmt = precioSugeridoCLP * (params.margenObjetivo / 100);
+  const multiplicador = precioSugeridoCLP / (prod.precioAli * params.usdClp);
+
+  const breakdown = [
+    { label: "Producto Alibaba", clp: precioUnitUSD * params.usdClp, color: "#378ADD", note: "" },
+    { label: "Flete por unidad (parte del CIF)", clp: fleteUnitUSD * params.usdClp, color: "#6366f1", note: "entra al CIF" },
+    { label: `Arancel aduanero (${params.arancel}% CIF)`, clp: arancelCLP, color: "#f59e0b", note: params.arancelActivo ? "" : "inactivo" },
+    { label: `IVA importación (${params.iva}% CIF+arancel)`, clp: ivaCostoCLP, color: "#ef4444", note: !params.ivaActivo ? "inactivo" : params.ivaRecuperable ? "recuperable — no es costo" : "" },
+    { label: "Honorarios DHL (fuera del CIF)", clp: dhlUnitCLP, color: "#8b5cf6", note: "siempre costo" },
+  ].filter(b => b.clp > 0 || b.note === "inactivo" || b.note === "recuperable — no es costo");
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 16 }}>
+        <div>
+          <div style={S.card}>
+            <p style={S.sectionLabel}>producto</p>
+            <Field label="Nombre" value={prod.nombre} onChange={v => set("nombre", v)} type="text" />
+            <Field label="Precio unitario Alibaba" value={prod.precioAli} onChange={v => set("precioAli", v)} unit="USD" />
+            <Field label="Unidades en el pedido" value={prod.unidades} onChange={v => set("unidades", v)} unit="unid." />
+            <Field label="Flete internacional total" value={prod.flete} onChange={v => set("flete", v)} unit="USD" hint="Entra al CIF" />
+          </div>
+          <div style={{ ...S.card, background: "var(--color-background-secondary)" }}>
+            <p style={S.sectionLabel}>cálculo CIF</p>
+            <div style={S.row}><span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Precio unitario</span><span style={{ fontSize: 12 }}>${fmt(precioUnitUSD * params.usdClp)} <span style={{ color: "var(--color-text-tertiary)" }}>(USD {prod.precioAli})</span></span></div>
+            <div style={S.row}><span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Flete por unidad</span><span style={{ fontSize: 12 }}>${fmt(fleteUnitUSD * params.usdClp)} <span style={{ color: "var(--color-text-tertiary)" }}>(USD {fleteUnitUSD.toFixed(2)})</span></span></div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontWeight: 500, fontSize: 13 }}><span>CIF por unidad</span><span style={{ color: "var(--color-text-info)" }}>${fmt(cifCLP)}</span></div>
+            <hr style={{ ...S.divider, margin: "4px 0 8px" }} />
+            <div style={S.row}><span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Honorarios DHL</span><span style={{ fontSize: 12 }}>${fmt(dhlUnitCLP)} <span style={{ color: "var(--color-text-tertiary)" }}>(fuera del CIF)</span></span></div>
+          </div>
+        </div>
+        <div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, marginBottom: 16 }}>
+            <div style={S.mc}><p style={S.label}>CIF por unidad</p><p style={{ ...S.val, fontSize: 18, color: "var(--color-text-info)" }}>${fmt(cifCLP)}</p><p style={S.sub}>base para impuestos</p></div>
+            <div style={S.mc}><p style={S.label}>Costo en bodega</p><p style={S.val}>${fmt(costoBodegaCLP)}</p><p style={S.sub}>CIF + impuestos + DHL</p></div>
+            <div style={S.mc}><p style={S.label}>Precio sugerido ML</p><p style={{ ...S.val, color: "var(--color-text-success)" }}>${fmt(precioSugeridoCLP)}</p><p style={S.sub}>con {params.margenObjetivo}% margen</p></div>
+          </div>
+          <div style={S.card}>
+            <p style={S.sectionLabel}>desglose costo en bodega</p>
+            {breakdown.map(b => (
+              <div key={b.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ width: 7, height: 7, borderRadius: 2, background: b.note === "inactivo" ? "var(--color-border-tertiary)" : b.color }} />
+                  <span style={{ color: b.note === "inactivo" ? "var(--color-text-tertiary)" : "var(--color-text-secondary)" }}>{b.label}</span>
+                </div>
+                <div style={{ textAlign: "right", display: "flex", alignItems: "center", gap: 8 }}>
+                  {b.note && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)", fontStyle: "italic" }}>{b.note}</span>}
+                  <span style={{ fontWeight: 500, color: b.note === "inactivo" || b.note === "recuperable — no es costo" ? "var(--color-text-tertiary)" : "var(--color-text-primary)" }}>
+                    {b.note === "inactivo" ? "—" : b.note === "recuperable — no es costo" ? `$${fmt(ivaBaseCLP)} (no suma)` : `$${fmt(b.clp)}`}
+                  </span>
+                </div>
+              </div>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontWeight: 500, fontSize: 13, marginTop: 2 }}>
+              <span>Total costo en bodega</span><span style={{ fontSize: 16 }}>${fmt(costoBodegaCLP)}</span>
+            </div>
+          </div>
+          <div style={S.card}>
+            <p style={S.sectionLabel}>distribución precio de venta sugerido</p>
+            {[
+              { label: "Costo en bodega", amt: costoBodegaCLP, color: "info" },
+              { label: `Comisión ML (${params.mlComision}%)`, amt: comisionAmt, color: "warning" },
+              { label: `Full ML (${params.mlFull}%)`, amt: fullAmt, color: "warning" },
+              { label: `Publicidad (${params.mlAds}%)`, amt: adsAmt, color: "danger" },
+              { label: `Tu margen (${params.margenObjetivo}%)`, amt: margenAmt, color: "success" },
+            ].map(item => (
+              <div key={item.label} style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>{item.label}</span><span style={{ fontWeight: 500, color: `var(--color-text-${item.color})` }}>${fmt(item.amt)}</span></div>
+            ))}
+            <hr style={S.divider} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div><span style={{ fontWeight: 500 }}>Precio mínimo (sin ads, sin margen)</span><p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: "2px 0 0" }}>punto de equilibrio exacto</p></div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 14, fontWeight: 500, color: "var(--color-text-warning)" }}>${fmt(precioMinCLP)}</div>
+                <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>{isFinite(multiplicador) ? multiplicador.toFixed(1) : "—"}x sobre Alibaba</div>
+              </div>
+            </div>
+          </div>
+          {params.ivaActivo && params.ivaRecuperable && (
+            <div style={S.alert("info")}>
+              <p style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-info)", margin: "0 0 2px" }}>IVA recuperable: ${fmt(ivaBaseCLP)} por unidad no entra al costo</p>
+              <p style={{ fontSize: 12, color: "var(--color-text-info)", margin: 0 }}>Para recuperarlo, pide la DIN a DHL y declárala en SII → Servicios online → Registro de compras y ventas el mismo mes de la importación.</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TabDashboard({ params }) {
+  const [skus, setSkus] = useState([
+    { nombre: "Almohadillas AirPods Pro", costoImport: 2640, ingProd: 213045, cargoVenta: -58709, envioNeto: 17840, neto: 172176, ventasAds: 15, ventasOrg: 8, pubTotal: 101768 },
+    { nombre: "Kit 15 Mechas Tubeless", costoImport: 2808, ingProd: 38750, cargoVenta: -10474, envioNeto: 0, neto: 28276, ventasAds: 4, ventasOrg: 2, pubTotal: 0 },
+    { nombre: "10x Tripas Tubeless", costoImport: 526, ingProd: 14220, cargoVenta: -4385, envioNeto: 0, neto: 9835, ventasAds: 3, ventasOrg: 0, pubTotal: 0 },
+    { nombre: "Android Auto CarPlay", costoImport: 5800, ingProd: 19180, cargoVenta: -4261, envioNeto: -6200, neto: 8719, ventasAds: 1, ventasOrg: 0, pubTotal: 0 },
+  ]);
+  const [pubGlobal, setPubGlobal] = useState(101768);
+  const [editIdx, setEditIdx] = useState(null);
+
+  const totalAdsN = skus.reduce((a, s) => a + s.ventasAds, 0);
+  const pubPorVentaAds = totalAdsN > 0 ? pubGlobal / totalAdsN : 0;
+
+  const calcSku = (s) => {
+    const nAds = s.ventasAds, nOrg = s.ventasOrg, n = nAds + nOrg;
+    const netoMLAds = nAds > 0 ? s.neto * nAds / n : 0;
+    const netoMLOrg = nOrg > 0 ? s.neto * nOrg / n : 0;
+    const pubTotal = pubPorVentaAds * nAds;
+    const netoRealAds = nAds > 0 ? netoMLAds / nAds - pubPorVentaAds - s.costoImport : null;
+    const netoRealOrg = nOrg > 0 ? netoMLOrg / nOrg - s.costoImport : null;
+    const margenAds = nAds > 0 && s.ingProd > 0 ? netoRealAds / (s.ingProd / n) * 100 : null;
+    const margenOrg = nOrg > 0 && s.ingProd > 0 ? netoRealOrg / (s.ingProd / n) * 100 : null;
+    return { netoRealAds, netoRealOrg, margenAds, margenOrg, pubTotal, n, nAds, nOrg };
+  };
+
+  const colorMargen = (v) => v === null ? "secondary" : v > 20 ? "success" : v > 0 ? "warning" : "danger";
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={S.mc}>
+            <p style={S.label}>Publicidad total período</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>$</span>
+              <input type="number" value={pubGlobal} onChange={e => setPubGlobal(parseFloat(e.target.value) || 0)} style={{ ...S.input, width: 120, fontSize: 16, fontWeight: 500 }} />
+              <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>CLP</span>
+            </div>
+          </div>
+          <div style={S.mc}><p style={S.label}>Costo ads / venta ads</p><p style={{ ...S.val, fontSize: 18, color: "var(--color-text-danger)" }}>${fmt(pubPorVentaAds)}</p></div>
+        </div>
+        <button onClick={() => setSkus([...skus, { nombre: "Nuevo SKU", costoImport: 0, ingProd: 0, cargoVenta: 0, envioNeto: 0, neto: 0, ventasAds: 0, ventasOrg: 0 }])} style={{ fontSize: 12, padding: "7px 14px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", cursor: "pointer", color: "var(--color-text-primary)", fontFamily: "inherit" }}>+ SKU</button>
+      </div>
+
+      {skus.map((s, i) => {
+        const c = calcSku(s);
+        const isEdit = editIdx === i;
+        const borderColor = c.netoRealAds < 0 || c.netoRealOrg < 0 ? "var(--color-border-danger)" : c.netoRealOrg > 3000 ? "var(--color-border-success)" : "var(--color-border-warning)";
+        return (
+          <div key={i} style={{ ...S.card, borderLeft: `3px solid ${borderColor}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isEdit ? 12 : 6 }}>
+              <span style={{ fontWeight: 500, fontSize: 14 }}>{s.nombre}</span>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => setEditIdx(isEdit ? null : i)} style={{ fontSize: 11, padding: "3px 10px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", cursor: "pointer", color: "var(--color-text-secondary)", fontFamily: "inherit" }}>{isEdit ? "cerrar" : "editar"}</button>
+                <button onClick={() => setSkus(skus.filter((_, j) => j !== i))} style={{ fontSize: 11, padding: "3px 10px", background: "var(--color-background-danger)", border: "none", borderRadius: "var(--border-radius-md)", cursor: "pointer", color: "var(--color-text-danger)", fontFamily: "inherit" }}>×</button>
+              </div>
+            </div>
+            {isEdit && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 8, marginBottom: 12, padding: 12, background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)" }}>
+                {[
+                  ["Nombre", "nombre", "text"], ["Costo importación/u", "costoImport", "number", "CLP"],
+                  ["Ingresos producto", "ingProd", "number", "CLP"], ["Cargo venta ML", "cargoVenta", "number", "CLP"],
+                  ["Envío neto", "envioNeto", "number", "CLP"], ["Total neto ML", "neto", "number", "CLP"],
+                  ["Ventas con ads", "ventasAds", "number", "u"], ["Ventas orgánicas", "ventasOrg", "number", "u"],
+                ].map(([lbl, key, type, unit]) => (
+                  <Field key={key} label={lbl} value={s[key]} onChange={v => setSkus(skus.map((x, j) => j === i ? { ...x, [key]: v } : x))} type={type} unit={unit} />
+                ))}
+              </div>
+            )}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 8 }}>
+              {[
+                { label: "Ventas totales", val: `${c.n}u (${c.nAds} ads / ${c.nOrg} org)`, color: "primary" },
+                { label: "Margen con ads", val: c.margenAds !== null ? pct(c.margenAds) : "—", color: colorMargen(c.margenAds), extra: c.netoRealAds !== null ? `$${fmt(c.netoRealAds)}/u` : "" },
+                { label: "Margen orgánico", val: c.margenOrg !== null ? pct(c.margenOrg) : "—", color: colorMargen(c.margenOrg), extra: c.netoRealOrg !== null ? `$${fmt(c.netoRealOrg)}/u` : "" },
+                { label: "Costo publicidad", val: `$${fmt(c.pubTotal)}`, color: c.pubTotal > 0 ? "danger" : "secondary" },
+              ].map(item => (
+                <div key={item.label} style={S.mc}>
+                  <p style={S.label}>{item.label}</p>
+                  <p style={{ fontSize: 16, fontWeight: 500, margin: 0, color: `var(--color-text-${item.color})` }}>{item.val}</p>
+                  {item.extra && <p style={S.sub}>{item.extra}</p>}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TabComparador({ params }) {
+  const [prod, setProd] = useState({ nombre: "Producto ejemplo", ali_precio: 4.5, ali_envio_incluido: true, ali_envio_costo: 0, alib_precio: 3.2, alib_unidades: 50, alib_flete: 80 });
+  const set = (k, v) => setProd(p => ({ ...p, [k]: v }));
+
+  const ali_cif = prod.ali_precio * params.usdClp + (prod.ali_envio_incluido ? 0 : prod.ali_envio_costo * params.usdClp);
+  const ali_arancel = params.arancelActivo ? ali_cif * (params.arancel / 100) : 0;
+  const ali_iva_base = params.ivaActivo ? (ali_cif + ali_arancel) * (params.iva / 100) : 0;
+  const ali_iva_costo = (params.ivaActivo && !params.ivaRecuperable) ? ali_iva_base : 0;
+  const ali_total = ali_cif + ali_arancel + ali_iva_costo;
+
+  const alib_cif = prod.alib_precio * params.usdClp + (prod.alib_flete / (prod.alib_unidades || 1)) * params.usdClp;
+  const alib_arancel = params.arancelActivo ? alib_cif * (params.arancel / 100) : 0;
+  const alib_iva_base = params.ivaActivo ? (alib_cif + alib_arancel) * (params.iva / 100) : 0;
+  const alib_iva_costo = (params.ivaActivo && !params.ivaRecuperable) ? alib_iva_base : 0;
+  const alib_dhl = (params.dhlFee / (prod.alib_unidades || 1)) * params.usdClp;
+  const alib_total = alib_cif + alib_arancel + alib_iva_costo + alib_dhl;
+
+  const diferencia = ali_total - alib_total;
+  const ganador = diferencia > 0 ? "Alibaba" : diferencia < 0 ? "Aliexpress" : "Empate";
+  const pctDif = Math.abs(diferencia / Math.max(ali_total, alib_total)) * 100;
+
+  const rowComp = (label, aliVal, alibVal, aliColor, alibColor) => (
+    <div style={S.row}>
+      <span style={{ color: "var(--color-text-secondary)" }}>{label}</span>
+      <div style={{ display: "flex", gap: 24 }}>
+        <span style={{ color: aliColor || "var(--color-text-primary)", minWidth: 80, textAlign: "right" }}>{aliVal}</span>
+        <span style={{ color: alibColor || "var(--color-text-primary)", minWidth: 80, textAlign: "right" }}>{alibVal}</span>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+        <div style={S.card}>
+          <p style={{ ...S.sectionLabel, color: "#f59e0b" }}>aliexpress</p>
+          <Field label="Precio unitario" value={prod.ali_precio} onChange={v => set("ali_precio", v)} unit="USD" />
+          <Toggle label="Envío incluido en precio" value={prod.ali_envio_incluido} onChange={v => set("ali_envio_incluido", v)} />
+          {!prod.ali_envio_incluido && <Field label="Costo envío" value={prod.ali_envio_costo} onChange={v => set("ali_envio_costo", v)} unit="USD" />}
+          <hr style={S.divider} />
+          <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>CIF</span><span>${fmt(ali_cif)}</span></div>
+          <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>Arancel {params.arancelActivo ? `(${params.arancel}%)` : "(inactivo)"}</span><span style={{ color: params.arancelActivo ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}>{params.arancelActivo ? `$${fmt(ali_arancel)}` : "—"}</span></div>
+          <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>IVA {!params.ivaActivo ? "(inactivo)" : params.ivaRecuperable ? "(recuperable)" : "(costo)"}</span><span style={{ color: !params.ivaActivo ? "var(--color-text-tertiary)" : params.ivaRecuperable ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{!params.ivaActivo ? "—" : params.ivaRecuperable ? "no es costo" : `$${fmt(ali_iva_costo)}`}</span></div>
+          <div style={S.row}><span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>Honorarios DHL</span><span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>N/A</span></div>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontWeight: 500 }}><span>Total bodega</span><span style={{ fontSize: 18, color: diferencia > 0 ? "var(--color-text-danger)" : "var(--color-text-success)" }}>${fmt(ali_total)}</span></div>
+        </div>
+        <div style={S.card}>
+          <p style={{ ...S.sectionLabel, color: "#378ADD" }}>alibaba</p>
+          <Field label="Precio unitario" value={prod.alib_precio} onChange={v => set("alib_precio", v)} unit="USD" />
+          <Field label="Unidades del pedido" value={prod.alib_unidades} onChange={v => set("alib_unidades", v)} unit="unid." />
+          <Field label="Flete total DHL" value={prod.alib_flete} onChange={v => set("alib_flete", v)} unit="USD" />
+          <hr style={S.divider} />
+          <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>CIF (producto + flete/u)</span><span>${fmt(alib_cif)}</span></div>
+          <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>Arancel {params.arancelActivo ? `(${params.arancel}%)` : "(inactivo)"}</span><span style={{ color: params.arancelActivo ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}>{params.arancelActivo ? `$${fmt(alib_arancel)}` : "—"}</span></div>
+          <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>IVA {!params.ivaActivo ? "(inactivo)" : params.ivaRecuperable ? "(recuperable)" : "(costo)"}</span><span style={{ color: !params.ivaActivo ? "var(--color-text-tertiary)" : params.ivaRecuperable ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{!params.ivaActivo ? "—" : params.ivaRecuperable ? "no es costo" : `$${fmt(alib_iva_costo)}`}</span></div>
+          <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>Honorarios DHL/u</span><span>${fmt(alib_dhl)}</span></div>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontWeight: 500 }}><span>Total bodega</span><span style={{ fontSize: 18, color: diferencia < 0 ? "var(--color-text-danger)" : "var(--color-text-success)" }}>${fmt(alib_total)}</span></div>
+        </div>
+      </div>
+      <div style={{ ...S.card, textAlign: "center" }}>
+        <p style={S.sectionLabel}>veredicto</p>
+        <p style={{ fontSize: 28, fontWeight: 500, margin: "0 0 6px", color: ganador === "Alibaba" ? "#378ADD" : ganador === "Aliexpress" ? "#f59e0b" : "var(--color-text-primary)" }}>{ganador} es más barato</p>
+        <p style={{ fontSize: 14, color: "var(--color-text-secondary)", margin: "0 0 12px" }}>por ${fmt(Math.abs(diferencia))} por unidad ({pct(pctDif)})</p>
+        {!params.ivaRecuperable && <div style={S.alert("warning")}><p style={{ fontSize: 12, color: "var(--color-text-warning)", margin: 0 }}>Con IVA recuperable activado, Alibaba mejora relativamente porque genera DIN y crédito fiscal. Aliexpress no.</p></div>}
+        {prod.alib_unidades < 20 && <div style={S.alert("info")}><p style={{ fontSize: 12, color: "var(--color-text-info)", margin: 0 }}>Con pedidos pequeños ({prod.alib_unidades}u), el DHL diluye poco. Aumenta las unidades para ver cómo mejora Alibaba con volumen.</p></div>}
+      </div>
+    </div>
+  );
+}
+
+function TabEscalamiento({ params }) {
+  const [cfg, setCfg] = useState({ aliPrecio: 4.5, aliEnvioIncluido: true, aliEnvioCosto: 0, alibPrecio: 3.2, alibFlete: 80, alibMOQ: 50, precioVenta: 9490 });
+  const set = (k, v) => setCfg(p => ({ ...p, [k]: v }));
+
+  const ali_cif = cfg.aliPrecio * params.usdClp + (cfg.aliEnvioIncluido ? 0 : cfg.aliEnvioCosto * params.usdClp);
+  const ali_arancel = params.arancelActivo ? ali_cif * (params.arancel / 100) : 0;
+  const ali_iva = (params.ivaActivo && !params.ivaRecuperable) ? (ali_cif + ali_arancel) * (params.iva / 100) : 0;
+  const costo_ali = ali_cif + ali_arancel + ali_iva;
+
+  const alib_cif = cfg.alibPrecio * params.usdClp + (cfg.alibFlete / (cfg.alibMOQ || 1)) * params.usdClp;
+  const alib_arancel = params.arancelActivo ? alib_cif * (params.arancel / 100) : 0;
+  const alib_iva = (params.ivaActivo && !params.ivaRecuperable) ? (alib_cif + alib_arancel) * (params.iva / 100) : 0;
+  const alib_dhl = (params.dhlFee / (cfg.alibMOQ || 1)) * params.usdClp;
+  const costo_alib = alib_cif + alib_arancel + alib_iva + alib_dhl;
+
+  const mlDeductions = (params.mlComision + params.mlFull) / 100;
+  const netoML = cfg.precioVenta * (1 - mlDeductions);
+  const margen_ali = netoML - costo_ali, margen_alib = netoML - costo_alib;
+  const alibConviene = costo_alib < costo_ali;
+  const niveles = [10, 20, 30, 50, 100];
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16 }}>
+        <div>
+          <div style={S.card}>
+            <p style={S.sectionLabel}>aliexpress (testeo)</p>
+            <Field label="Precio unitario" value={cfg.aliPrecio} onChange={v => set("aliPrecio", v)} unit="USD" />
+            <Toggle label="Envío incluido" value={cfg.aliEnvioIncluido} onChange={v => set("aliEnvioIncluido", v)} />
+            {!cfg.aliEnvioIncluido && <Field label="Costo envío" value={cfg.aliEnvioCosto} onChange={v => set("aliEnvioCosto", v)} unit="USD" />}
+          </div>
+          <div style={S.card}>
+            <p style={S.sectionLabel}>alibaba (escala)</p>
+            <Field label="Precio unitario" value={cfg.alibPrecio} onChange={v => set("alibPrecio", v)} unit="USD" />
+            <Field label="MOQ (mínimo pedido)" value={cfg.alibMOQ} onChange={v => set("alibMOQ", v)} unit="unid." />
+            <Field label="Flete total DHL" value={cfg.alibFlete} onChange={v => set("alibFlete", v)} unit="USD" />
+          </div>
+          <div style={S.card}>
+            <p style={S.sectionLabel}>precio de venta ML</p>
+            <Field label="Precio de venta" value={cfg.precioVenta} onChange={v => set("precioVenta", v)} unit="CLP" />
+          </div>
+        </div>
+        <div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+            {[
+              { label: "Costo bodega Aliexpress", val: costo_ali, color: "warning" },
+              { label: "Costo bodega Alibaba", val: costo_alib, color: "info" },
+              { label: "Margen neto con Aliexpress", val: margen_ali, color: margen_ali > 0 ? "success" : "danger" },
+              { label: "Margen neto con Alibaba", val: margen_alib, color: margen_alib > 0 ? "success" : "danger" },
+            ].map(item => (
+              <div key={item.label} style={S.mc}><p style={S.label}>{item.label}</p><p style={{ ...S.val, fontSize: 18, color: `var(--color-text-${item.color})` }}>${fmt(item.val)}</p><p style={S.sub}>por unidad</p></div>
+            ))}
+          </div>
+          <div style={S.card}>
+            <p style={S.sectionLabel}>ahorro mensual al escalar a alibaba</p>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+                  {["Unidades/mes", "Ahorro mensual", "Ahorro anual", "¿Conviene?"].map((h, i) => (
+                    <th key={h} style={{ textAlign: i === 0 ? "left" : "right", padding: "6px 0", color: "var(--color-text-tertiary)", fontWeight: 400 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {niveles.map(n => {
+                  const ahorro = (costo_ali - costo_alib) * n;
+                  const cumpleMOQ = n >= cfg.alibMOQ;
+                  return (
+                    <tr key={n} style={{ borderBottom: "0.5px solid var(--color-border-tertiary)", background: cumpleMOQ && alibConviene ? "var(--color-background-success)" : "transparent" }}>
+                      <td style={{ padding: "7px 0", fontWeight: cumpleMOQ ? 500 : 400 }}>{n}u</td>
+                      <td style={{ textAlign: "right", padding: "7px 0", color: ahorro > 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>${fmt(ahorro)}</td>
+                      <td style={{ textAlign: "right", padding: "7px 0", color: ahorro > 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>${fmt(ahorro * 12)}</td>
+                      <td style={{ textAlign: "right", padding: "7px 0" }}>{!cumpleMOQ ? <span style={S.pill("warning")}>bajo MOQ</span> : alibConviene ? <span style={S.pill("success")}>sí</span> : <span style={S.pill("danger")}>no</span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: "10px 0 0" }}>MOQ mínimo de Alibaba: {cfg.alibMOQ} unidades.</p>
+          </div>
+          {!alibConviene && <div style={S.alert("warning")}><p style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-warning)", margin: "0 0 2px" }}>Atención: con estos precios, Aliexpress es más barato por unidad</p><p style={{ fontSize: 12, color: "var(--color-text-warning)", margin: 0 }}>Revisa el precio de Alibaba o negocia mejor el flete.</p></div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TabPublicidad({ params }) {
+  const [cfg, setCfg] = useState({ precioVenta: 10490, costoProducto: 2640, roasActual: 4, pptoDiario: 3000, acosObjetivo: 20, ventasMes: 23, ventasAds: 15, pubMensual: 101768 });
+  const set = (k, v) => setCfg(p => ({ ...p, [k]: v }));
+
+  const mlDed = (params.mlComision + params.mlFull) / 100;
+  const netoML_pu = cfg.precioVenta * (1 - mlDed);
+  const margenDisponible = netoML_pu - cfg.costoProducto;
+  const acosMaxRentable = margenDisponible / cfg.precioVenta * 100;
+  const acosActual = 1 / cfg.roasActual * 100;
+  const pubPorVenta = cfg.pubMensual / (cfg.ventasAds || 1);
+  const margenConAds = margenDisponible - pubPorVenta;
+  const margenSinAds = margenDisponible;
+  const ventasIncrNecesarias = cfg.pubMensual / margenSinAds;
+  const ingresosPorVentaAds = cfg.ventasAds > 0 ? cfg.ventasAds * cfg.precioVenta / 30 : 0;
+  const pptoOptimo = ingresosPorVentaAds * (cfg.acosObjetivo / 100);
+
+  const escenarios = [
+    { roas: 2, label: "ROAS 2 — malo" }, { roas: 3, label: "ROAS 3 — aceptable" },
+    { roas: 4, label: "ROAS 4 — tu caso" }, { roas: 6, label: "ROAS 6 — bueno" },
+    { roas: 8, label: "ROAS 8 — excelente" },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 16 }}>
+        <div>
+          <div style={S.card}>
+            <p style={S.sectionLabel}>tu producto</p>
+            <Field label="Precio de venta" value={cfg.precioVenta} onChange={v => set("precioVenta", v)} unit="CLP" />
+            <Field label="Costo importación/u" value={cfg.costoProducto} onChange={v => set("costoProducto", v)} unit="CLP" />
+          </div>
+          <div style={S.card}>
+            <p style={S.sectionLabel}>tu campaña actual</p>
+            <Field label="ROAS actual" value={cfg.roasActual} onChange={v => set("roasActual", v)} hint="Dato de ML Ads" />
+            <Field label="Gasto mensual total" value={cfg.pubMensual} onChange={v => set("pubMensual", v)} unit="CLP" />
+            <Field label="Ventas totales/mes" value={cfg.ventasMes} onChange={v => set("ventasMes", v)} unit="u" />
+            <Field label="Ventas atribuidas a ads" value={cfg.ventasAds} onChange={v => set("ventasAds", v)} unit="u" />
+          </div>
+          <div style={S.card}>
+            <p style={S.sectionLabel}>objetivo</p>
+            <Field label="ACOS objetivo (%)" value={cfg.acosObjetivo} onChange={v => set("acosObjetivo", v)} unit="%" hint="Publicidad / Venta" />
+          </div>
+        </div>
+        <div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, marginBottom: 16 }}>
+            <div style={S.mc}><p style={S.label}>Margen sin publicidad</p><p style={{ ...S.val, color: "var(--color-text-success)" }}>${fmt(margenSinAds)}</p><p style={S.sub}>por unidad · {pct(margenSinAds / cfg.precioVenta * 100)}</p></div>
+            <div style={S.mc}><p style={S.label}>Margen con publicidad</p><p style={{ ...S.val, color: margenConAds > 0 ? "var(--color-text-warning)" : "var(--color-text-danger)" }}>${fmt(margenConAds)}</p><p style={S.sub}>por unidad · {pct(margenConAds / cfg.precioVenta * 100)}</p></div>
+            <div style={S.mc}><p style={S.label}>ACOS máximo rentable</p><p style={{ ...S.val, color: acosActual <= acosMaxRentable ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{pct(acosMaxRentable)}</p><p style={S.sub}>tu ACOS actual: {pct(acosActual)}</p></div>
+          </div>
+          <div style={S.card}>
+            <p style={S.sectionLabel}>diagnóstico de tu campaña</p>
+            {[
+              { label: "ROAS actual", right: <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 500 }}>{cfg.roasActual}x</span><span style={S.pill("success")}>mejor que 90% competidores</span></div> },
+              { label: "ACOS actual (1/ROAS)", right: <span style={{ fontWeight: 500, color: acosActual <= acosMaxRentable ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{pct(acosActual)}</span> },
+              { label: "Costo publicidad por venta ads", right: <span style={{ fontWeight: 500 }}>${fmt(pubPorVenta)}</span> },
+              { label: `Presupuesto diario óptimo (ACOS ${cfg.acosObjetivo}%)`, right: <span style={{ fontWeight: 500, color: "var(--color-text-info)" }}>${fmt(pptoOptimo)}/día</span> },
+              { label: "Ventas incrementales necesarias para ROI positivo", right: <span style={{ fontWeight: 500, color: "var(--color-text-warning)" }}>{Math.ceil(ventasIncrNecesarias)}u/mes</span> },
+            ].map((item, i) => (
+              <div key={i} style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>{item.label}</span>{item.right}</div>
+            ))}
+          </div>
+          <div style={S.card}>
+            <p style={S.sectionLabel}>simulador de escenarios ROAS → margen real</p>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+                  {["Escenario", "ACOS", "Pub/venta", "Margen real/u", "Rentable"].map((h, i) => (
+                    <th key={h} style={{ textAlign: i === 0 ? "left" : "right", padding: "6px 0", fontWeight: 400, color: "var(--color-text-tertiary)" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {escenarios.map(e => {
+                  const acos = 1 / e.roas * 100, pubU = cfg.precioVenta * (acos / 100), margen = margenDisponible - pubU;
+                  const esCaso = e.roas === cfg.roasActual;
+                  return (
+                    <tr key={e.roas} style={{ borderBottom: "0.5px solid var(--color-border-tertiary)", background: esCaso ? "var(--color-background-info)" : "transparent" }}>
+                      <td style={{ padding: "7px 0", fontWeight: esCaso ? 500 : 400 }}>{e.label}</td>
+                      <td style={{ textAlign: "right" }}>{pct(acos)}</td>
+                      <td style={{ textAlign: "right" }}>${fmt(pubU)}</td>
+                      <td style={{ textAlign: "right", fontWeight: 500, color: margen > 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>${fmt(margen)}</td>
+                      <td style={{ textAlign: "right" }}>{margen > 0 ? <span style={S.pill("success")}>sí</span> : <span style={S.pill("danger")}>no</span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {acosActual > acosMaxRentable
+            ? <div style={S.alert("danger")}><p style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-danger)", margin: "0 0 2px" }}>Tu ACOS actual ({pct(acosActual)}) supera el máximo rentable ({pct(acosMaxRentable)})</p><p style={{ fontSize: 12, color: "var(--color-text-danger)", margin: 0 }}>Sube el precio o baja el presupuesto diario a ${fmt(pptoOptimo)}.</p></div>
+            : <div style={S.alert("success")}><p style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-success)", margin: "0 0 2px" }}>Tu ACOS actual está dentro del rango rentable</p><p style={{ fontSize: 12, color: "var(--color-text-success)", margin: 0 }}>Con ROAS {cfg.roasActual} y precio ${fmt(cfg.precioVenta)}, la publicidad genera margen positivo de ${fmt(margenConAds)}/u.</p></div>
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [tab, setTab] = useState("pricing");
+  const [params, setParams] = useState(DEFAULT_PARAMS);
+  const [showParams, setShowParams] = useState(false);
+
+  return (
+    <div style={{ minHeight: "100vh", background: "var(--color-background-tertiary)", fontFamily: "var(--font-sans)" }}>
+      <div style={{ background: "var(--color-background-primary)", borderBottom: "0.5px solid var(--color-border-tertiary)", padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 10 }}>
+        <div>
+          <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 2 }}>FIXIT SPA</div>
+          <div style={{ fontSize: 18, fontWeight: 500, color: "var(--color-text-primary)" }}>Centro de control · Importación & ML</div>
+        </div>
+        <button onClick={() => setShowParams(!showParams)} style={{ fontSize: 12, padding: "7px 14px", background: showParams ? "var(--color-background-info)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", cursor: "pointer", color: showParams ? "var(--color-text-info)" : "var(--color-text-secondary)", fontFamily: "inherit" }}>
+          {showParams ? "Ocultar parámetros" : "Parámetros globales"}
+        </button>
+      </div>
+
+      {showParams && (
+        <div style={{ padding: "16px 24px 0", maxWidth: 900, margin: "0 auto" }}>
+          <ParamsPanel params={params} setParams={setParams} />
+        </div>
+      )}
+
+      <div style={{ background: "var(--color-background-primary)", borderBottom: "0.5px solid var(--color-border-tertiary)", padding: "0 24px", display: "flex", gap: 0 }}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{ background: "none", border: "none", borderBottom: tab === t.id ? "2px solid var(--color-border-info)" : "2px solid transparent", padding: "12px 16px", cursor: "pointer", fontSize: 13, color: tab === t.id ? "var(--color-text-info)" : "var(--color-text-secondary)", fontFamily: "inherit", transition: "all 0.15s", whiteSpace: "nowrap" }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ padding: "20px 24px", maxWidth: 1100, margin: "0 auto" }}>
+        {tab === "pricing" && <TabPricing params={params} />}
+        {tab === "dashboard" && <TabDashboard params={params} />}
+        {tab === "comparador" && <TabComparador params={params} />}
+        {tab === "escalamiento" && <TabEscalamiento params={params} />}
+        {tab === "publicidad" && <TabPublicidad params={params} />}
+      </div>
+    </div>
+  );
+}
