@@ -47,6 +47,7 @@ const DEFAULT_PARAMS = {
   usdClp: 950, arancel: 6, arancelActivo: true, iva: 19, ivaActivo: true,
   ivaRecuperable: true, dhlFee: 35, mlComision: 27.6, mlFull: 2.3,
   mlAds: 16, margenObjetivo: 35,
+  mlComisionFijaActiva: false, mlComisionFija: 0,
 };
 
 const TABS = [
@@ -180,7 +181,23 @@ function ParamsPanel({ params, setParams }) {
         </div>
         <div>
           <p style={{ ...S.sectionLabel, marginBottom: 8 }}>mercado libre</p>
-          <Field label="Comisión ML" value={params.mlComision} onChange={v => set("mlComision", v)} unit="%" />
+          {/* Comisión ML */}
+          <div style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "10px 12px", marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Comisión ML</span>
+              <button
+                onClick={() => set("mlComisionFijaActiva", !params.mlComisionFijaActiva)}
+                style={{ background: params.mlComisionFijaActiva ? "var(--color-background-warning)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "2px 10px", fontSize: 11, color: params.mlComisionFijaActiva ? "var(--color-text-warning)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>
+                {params.mlComisionFijaActiva ? "monto fijo activo" : "agregar monto fijo"}
+              </button>
+            </div>
+            <Field label="" value={params.mlComision} onChange={v => set("mlComision", v)} unit="%" />
+            {params.mlComisionFijaActiva && (
+              <div style={{ marginTop: 6, paddingTop: 8, borderTop: "0.5px solid var(--color-border-tertiary)" }}>
+                <Field label="Cargo fijo adicional" value={params.mlComisionFija} onChange={v => set("mlComisionFija", v)} unit="CLP" hint="Se suma a la comisión %" />
+              </div>
+            )}
+          </div>
           <Field label="Full ML" value={params.mlFull} onChange={v => set("mlFull", v)} unit="%" />
           <Field label="% Publicidad" value={params.mlAds} onChange={v => set("mlAds", v)} unit="%" />
           <Field label="Margen objetivo" value={params.margenObjetivo} onChange={v => set("margenObjetivo", v)} unit="%" />
@@ -192,7 +209,9 @@ function ParamsPanel({ params, setParams }) {
 
 function TabPricing({ params }) {
   const [prod, setProd] = useState({ nombre: "Nuevo producto", precioAli: 5, unidades: 50, flete: 80 });
+  const [precioMinConAds, setPrecioMinConAds] = useState(false);
   const set = (k, v) => setProd(p => ({ ...p, [k]: v }));
+
   const u = prod.unidades || 1;
   const precioUnitUSD = prod.precioAli, fleteUnitUSD = prod.flete / u;
   const cifUSD = precioUnitUSD + fleteUnitUSD, cifCLP = cifUSD * params.usdClp;
@@ -201,10 +220,26 @@ function TabPricing({ params }) {
   const ivaCostoCLP = (params.ivaActivo && !params.ivaRecuperable) ? ivaBaseCLP : 0;
   const dhlUnitCLP = (params.dhlFee / u) * params.usdClp;
   const costoBodegaCLP = cifCLP + arancelCLP + ivaCostoCLP + dhlUnitCLP;
+
+  // Precio sugerido (con margen objetivo)
   const deductions = (params.mlComision + params.mlFull + params.mlAds + params.margenObjetivo) / 100;
-  const precioSugeridoCLP = costoBodegaCLP / (1 - deductions);
-  const precioMinCLP = costoBodegaCLP / (1 - (params.mlComision + params.mlFull) / 100);
-  const comisionAmt = precioSugeridoCLP * (params.mlComision / 100);
+  const precioSugeridoCLP_base = costoBodegaCLP / (1 - deductions);
+  const comisionFija = params.mlComisionFijaActiva ? params.mlComisionFija : 0;
+  // Con comisión fija: precio = (bodega + comisionFija) / (1 - resto_porcentajes)
+  const deductionsSinComision = (params.mlFull + params.mlAds + params.margenObjetivo) / 100;
+  const precioSugeridoCLP = params.mlComisionFijaActiva
+    ? (costoBodegaCLP + comisionFija) / (1 - (params.mlComision / 100) - deductionsSinComision)
+    : costoBodegaCLP / (1 - deductions);
+
+  // Precio mínimo CORREGIDO: bodega + comisión ML + Full (+ ads opcional)
+  // precio_min = bodega + precio_min * (mlComision/100) + precio_min * (mlFull/100) [+ precio_min * (mlAds/100)]
+  // precio_min * (1 - mlComision% - mlFull% [- mlAds%]) = bodega + comisionFija
+  const pctMin = precioMinConAds
+    ? (params.mlComision + params.mlFull + params.mlAds) / 100
+    : (params.mlComision + params.mlFull) / 100;
+  const precioMinCLP = (costoBodegaCLP + comisionFija) / (1 - pctMin);
+
+  const comisionPctAmt = precioSugeridoCLP * (params.mlComision / 100);
   const fullAmt = precioSugeridoCLP * (params.mlFull / 100);
   const adsAmt = precioSugeridoCLP * (params.mlAds / 100);
   const margenAmt = precioSugeridoCLP * (params.margenObjetivo / 100);
@@ -244,6 +279,7 @@ function TabPricing({ params }) {
             <div style={S.mc}><p style={S.label}>Costo en bodega</p><p style={S.val}>${fmt(costoBodegaCLP)}</p><p style={S.sub}>CIF + impuestos + DHL</p></div>
             <div style={S.mc}><p style={S.label}>Precio sugerido ML</p><p style={{ ...S.val, color: "var(--color-text-success)" }}>${fmt(precioSugeridoCLP)}</p><p style={S.sub}>con {params.margenObjetivo}% margen</p></div>
           </div>
+
           <div style={S.card}>
             <p style={S.sectionLabel}>desglose costo en bodega</p>
             {breakdown.map(b => (
@@ -264,11 +300,12 @@ function TabPricing({ params }) {
               <span>Total costo en bodega</span><span style={{ fontSize: 16 }}>${fmt(costoBodegaCLP)}</span>
             </div>
           </div>
+
           <div style={S.card}>
             <p style={S.sectionLabel}>distribución precio de venta sugerido</p>
             {[
               { label: "Costo en bodega", amt: costoBodegaCLP, color: "info" },
-              { label: `Comisión ML (${params.mlComision}%)`, amt: comisionAmt, color: "warning" },
+              { label: `Comisión ML (${params.mlComision}%)${params.mlComisionFijaActiva ? ` + $${fmt(comisionFija)} fijo` : ""}`, amt: comisionPctAmt + comisionFija, color: "warning" },
               { label: `Full ML (${params.mlFull}%)`, amt: fullAmt, color: "warning" },
               { label: `Publicidad (${params.mlAds}%)`, amt: adsAmt, color: "danger" },
               { label: `Tu margen (${params.margenObjetivo}%)`, amt: margenAmt, color: "success" },
@@ -276,14 +313,29 @@ function TabPricing({ params }) {
               <div key={item.label} style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>{item.label}</span><span style={{ fontWeight: 500, color: `var(--color-text-${item.color})` }}>${fmt(item.amt)}</span></div>
             ))}
             <hr style={S.divider} />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div><span style={{ fontWeight: 500 }}>Precio mínimo (sin ads, sin margen)</span><p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: "2px 0 0" }}>punto de equilibrio exacto</p></div>
+
+            {/* Precio mínimo */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontWeight: 500, fontSize: 13 }}>Precio mínimo</span>
+                  <button
+                    onClick={() => setPrecioMinConAds(!precioMinConAds)}
+                    style={{ background: precioMinConAds ? "var(--color-background-danger)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "2px 9px", fontSize: 11, color: precioMinConAds ? "var(--color-text-danger)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>
+                    {precioMinConAds ? "incl. publicidad" : "+ publicidad?"}
+                  </button>
+                </div>
+                <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: 0 }}>
+                  bodega + comisión ML + Full{precioMinConAds ? " + ads" : ""}{params.mlComisionFijaActiva ? " + cargo fijo" : ""}
+                </p>
+              </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 14, fontWeight: 500, color: "var(--color-text-warning)" }}>${fmt(precioMinCLP)}</div>
                 <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>{isFinite(multiplicador) ? multiplicador.toFixed(1) : "—"}x sobre Alibaba</div>
               </div>
             </div>
           </div>
+
           {params.ivaActivo && params.ivaRecuperable && (
             <div style={S.alert("info")}>
               <p style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-info)", margin: "0 0 2px" }}>IVA recuperable: ${fmt(ivaBaseCLP)} por unidad no entra al costo</p>
@@ -406,16 +458,6 @@ function TabComparador({ params }) {
   const diferencia = ali_total - alib_total;
   const ganador = diferencia > 0 ? "Alibaba" : diferencia < 0 ? "Aliexpress" : "Empate";
   const pctDif = Math.abs(diferencia / Math.max(ali_total, alib_total)) * 100;
-
-  const rowComp = (label, aliVal, alibVal, aliColor, alibColor) => (
-    <div style={S.row}>
-      <span style={{ color: "var(--color-text-secondary)" }}>{label}</span>
-      <div style={{ display: "flex", gap: 24 }}>
-        <span style={{ color: aliColor || "var(--color-text-primary)", minWidth: 80, textAlign: "right" }}>{aliVal}</span>
-        <span style={{ color: alibColor || "var(--color-text-primary)", minWidth: 80, textAlign: "right" }}>{alibVal}</span>
-      </div>
-    </div>
-  );
 
   return (
     <div>
@@ -682,7 +724,6 @@ function App() {
     </div>
   );
 }
-
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
   </script>
