@@ -512,8 +512,8 @@ function TabComparador({ params }) {
 
   const ali_cif = prod.ali_precio * params.usdClp + (prod.ali_envio_incluido ? 0 : prod.ali_envio_costo * params.usdClp);
   const ali_arancel = params.arancelActivo ? ali_cif * (params.arancel / 100) : 0;
-  const ali_iva_base = params.ivaActivo ? (ali_cif + ali_arancel) * (params.iva / 100) : 0;
-  const ali_iva_costo = (params.ivaActivo && !params.ivaRecuperable && !prod.ali_iva_incluido) ? ali_iva_base : 0;
+  const ali_iva_base = params.ivaActivo && !prod.ali_iva_incluido ? (ali_cif + ali_arancel) * (params.iva / 100) : 0;
+  const ali_iva_costo = ali_iva_base > 0 && !params.ivaRecuperable ? ali_iva_base : 0;
   const ali_total = ali_cif + ali_arancel + ali_iva_costo;
 
   const alib_cif = prod.alib_precio * params.usdClp + (prod.alib_flete / (prod.alib_unidades || 1)) * params.usdClp;
