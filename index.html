@@ -512,7 +512,7 @@ function TabComparador({ params }) {
 
   const ali_cif = prod.ali_precio * params.usdClp + (prod.ali_envio_incluido ? 0 : prod.ali_envio_costo * params.usdClp);
   const ali_arancel = params.arancelActivo ? ali_cif * (params.arancel / 100) : 0;
-  const ali_iva_base = (ali_cif + ali_arancel) * (params.iva / 100);
+  const ali_iva_base = params.ivaActivo ? (ali_cif + ali_arancel) * (params.iva / 100) : 0;
   const ali_iva_costo = prod.ali_iva_incluido ? 0 : ali_iva_base;
   const ali_total = ali_cif + ali_arancel + ali_iva_costo;
 
