@@ -1,12 +1,60 @@
+<!--
+  ============================================================================
+  FIXIT SPA - Centro de control - Importacion & ML
+  Con sistema de cotizaciones persistentes en Google Drive
+  ============================================================================
+
+  INSTRUCCIONES DE CONFIGURACION - Google Drive API
+
+  1. Ir a https://console.cloud.google.com/
+  2. Crear un nuevo proyecto (ej: "FIXIT Tool")
+  3. En "APIs y servicios" > "Biblioteca", buscar y habilitar:
+     - Google Drive API
+  4. Ir a "APIs y servicios" > "Credenciales"
+  5. Crear credencial tipo "Clave de API" (API Key):
+     - Restringir a "Referentes HTTP"
+     - Agregar: https://stiflerspain.github.io/*
+     - Restringir a APIs: Google Drive API
+  6. Crear credencial tipo "ID de cliente OAuth 2.0":
+     - Tipo de aplicacion: "Aplicacion web"
+     - Origenes autorizados de JavaScript:
+         https://stiflerspain.github.io
+     - URIs de redireccion autorizados:
+         https://stiflerspain.github.io/fixit-tool/
+  7. Configurar la pantalla de consentimiento OAuth:
+     - Tipo de usuario: Externo
+     - Agregar scope: https://www.googleapis.com/auth/drive.file
+     - Agregar los emails de prueba (tu cuenta y la del socio)
+     - Publicar la app cuando este lista (o dejar en testing)
+  8. Copiar el CLIENT_ID y API_KEY en las constantes del codigo:
+     - GOOGLE_CLIENT_ID = 'xxxx.apps.googleusercontent.com'
+     - GOOGLE_API_KEY = 'AIzaSy...'
+  9. Para que el socio vea los mismos datos:
+     - Ambos se loguean con su propia cuenta Google
+     - El dueno de la carpeta FIXIT-Data va a Google Drive
+       y la comparte con el email del socio (Editor)
+     - Ahora ambos ven y editan las mismas cotizaciones
+
+  NOTA DE SEGURIDAD:
+  - El scope drive.file solo permite acceder a archivos creados
+    por esta app. No tiene acceso al resto del Drive.
+  - Los tokens se guardan en sessionStorage (se borran al cerrar
+    la pestana).
+  - Si un tercero entra y se loguea, solo vera su propia carpeta
+    vacia. No tiene acceso a datos de otros usuarios.
+  ============================================================================
+-->
 <!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FIXIT SPA · Centro de control</title>
+  <title>FIXIT SPA &middot; Centro de control</title>
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://apis.google.com/js/api.js" async defer></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -37,13 +85,399 @@
       --border-radius-lg: 8px;
       --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
+    .cot-panel { position: fixed; top: 0; right: -420px; width: 420px; height: 100vh; background: var(--color-background-primary); border-left: 1px solid var(--color-border-tertiary); box-shadow: -4px 0 20px rgba(0,0,0,0.08); z-index: 100; transition: right 0.25s ease; display: flex; flex-direction: column; }
+    .cot-panel.open { right: 0; }
+    .cot-panel-header { padding: 16px 20px; border-bottom: 1px solid var(--color-border-tertiary); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+    .cot-panel-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+    .cot-panel-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.15); z-index: 99; opacity: 0; pointer-events: none; transition: opacity 0.25s ease; }
+    .cot-panel-overlay.open { opacity: 1; pointer-events: auto; }
+    .cot-item { padding: 12px; border: 1px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); margin-bottom: 8px; cursor: pointer; transition: all 0.15s; }
+    .cot-item:hover { border-color: var(--color-border-info); background: var(--color-background-info); }
+    .cot-item.active { border-color: var(--color-border-info); background: var(--color-background-info); }
+    .cot-status { font-size: 10px; padding: 2px 8px; border-radius: 100px; display: inline-block; font-weight: 500; }
+    .cot-status-borrador { background: var(--color-background-secondary); color: var(--color-text-secondary); }
+    .cot-status-confirmada { background: var(--color-background-info); color: var(--color-text-info); }
+    .cot-status-importada { background: var(--color-background-warning); color: var(--color-text-warning); }
+    .cot-status-completada { background: var(--color-background-success); color: var(--color-text-success); }
+    .cot-banner { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-radius: var(--border-radius-md); margin-bottom: 12px; background: var(--color-background-info); border: 1px solid var(--color-border-info); }
+    .btn-cot { font-size: 12px; padding: 6px 14px; border-radius: var(--border-radius-md); cursor: pointer; font-family: inherit; border: 0.5px solid var(--color-border-secondary); transition: all 0.15s; }
+    .btn-cot:hover { filter: brightness(0.95); }
+    .btn-cot-primary { background: var(--color-background-info); color: var(--color-text-info); border-color: var(--color-border-info); }
+    .btn-cot-success { background: var(--color-background-success); color: var(--color-text-success); border-color: var(--color-border-success); }
+    .btn-cot-warning { background: var(--color-background-warning); color: var(--color-text-warning); border-color: var(--color-border-warning); }
+    .btn-cot-danger { background: var(--color-background-danger); color: var(--color-text-danger); border-color: var(--color-border-danger); }
+    .btn-cot-neutral { background: var(--color-background-secondary); color: var(--color-text-secondary); }
+    .drive-indicator { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 4px 10px; border-radius: 100px; }
+    .drive-indicator.connected { background: var(--color-background-success); color: var(--color-text-success); }
+    .drive-indicator.disconnected { background: var(--color-background-secondary); color: var(--color-text-tertiary); cursor: pointer; }
+    .drive-indicator.disconnected:hover { background: var(--color-background-tertiary); }
+    .drive-indicator.loading { background: var(--color-background-warning); color: var(--color-text-warning); }
+    .file-drop-zone { border: 2px dashed var(--color-border-secondary); border-radius: var(--border-radius-md); padding: 20px; text-align: center; cursor: pointer; transition: all 0.15s; }
+    .file-drop-zone:hover, .file-drop-zone.dragover { border-color: var(--color-border-info); background: var(--color-background-info); }
+    .file-attachment { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border: 1px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); margin-bottom: 6px; font-size: 12px; }
+    .cot-search { width: 100%; padding: 8px 12px; border: 1px solid var(--color-border-secondary); border-radius: var(--border-radius-md); font-size: 13px; font-family: inherit; outline: none; background: var(--color-background-secondary); color: var(--color-text-primary); }
+    .cot-search:focus { border-color: var(--color-border-info); }
+    .cot-filter-btn { font-size: 11px; padding: 3px 10px; border-radius: 100px; border: 1px solid var(--color-border-tertiary); background: var(--color-background-secondary); color: var(--color-text-secondary); cursor: pointer; font-family: inherit; }
+    .cot-filter-btn.active { background: var(--color-background-info); color: var(--color-text-info); border-color: var(--color-border-info); }
+    .status-dropdown { font-size: 12px; padding: 5px 10px; border: 1px solid var(--color-border-secondary); border-radius: var(--border-radius-md); background: var(--color-background-secondary); font-family: inherit; cursor: pointer; outline: none; color: var(--color-text-primary); }
+    @keyframes toastIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
 <body>
   <div id="root"></div>
   <script type="text/babel">
-const { useState, useCallback, useEffect } = React;
+const { useState, useCallback, useEffect, useRef } = React;
 
+/* ================================================================
+   GOOGLE DRIVE — Credenciales (reemplazar con las tuyas)
+   ================================================================ */
+const GOOGLE_CLIENT_ID = 'TU_CLIENT_ID_AQUI.apps.googleusercontent.com';
+const GOOGLE_API_KEY = 'TU_API_KEY_AQUI';
+const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file';
+const FIXIT_FOLDER_NAME = 'FIXIT-Data';
+const COT_FOLDER_NAME = 'cotizaciones';
+const FAC_FOLDER_NAME = 'facturas';
+
+/* ================================================================
+   GOOGLE DRIVE SERVICE
+   ================================================================ */
+const DriveService = {
+  tokenClient: null,
+  accessToken: null,
+  folderIds: { root: null, cotizaciones: null, facturas: null },
+
+  async init() {
+    return new Promise((resolve) => {
+      const checkGapi = setInterval(() => {
+        if (window.gapi) {
+          clearInterval(checkGapi);
+          gapi.load('client', async () => {
+            try {
+              await gapi.client.init({ apiKey: GOOGLE_API_KEY, discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'] });
+            } catch (e) { resolve('unavailable'); return; }
+            const saved = sessionStorage.getItem('fixit_gtoken');
+            if (saved) {
+              try {
+                const parsed = JSON.parse(saved);
+                if (parsed.expiry > Date.now()) {
+                  DriveService.accessToken = parsed.token;
+                  gapi.client.setToken({ access_token: parsed.token });
+                  resolve('restored');
+                  return;
+                }
+              } catch (e) {}
+              sessionStorage.removeItem('fixit_gtoken');
+            }
+            resolve('ready');
+          });
+        }
+      }, 100);
+      setTimeout(() => { clearInterval(checkGapi); resolve('unavailable'); }, 8000);
+    });
+  },
+
+  initTokenClient(callback) {
+    const checkGis = setInterval(() => {
+      if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+        clearInterval(checkGis);
+        DriveService.tokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: DRIVE_SCOPES,
+          callback: (resp) => {
+            if (resp.error) { callback({ error: resp.error }); return; }
+            DriveService.accessToken = resp.access_token;
+            const expiry = Date.now() + (resp.expires_in * 1000);
+            sessionStorage.setItem('fixit_gtoken', JSON.stringify({ token: resp.access_token, expiry }));
+            gapi.client.setToken({ access_token: resp.access_token });
+            callback({ success: true });
+          },
+        });
+      }
+    }, 100);
+    setTimeout(() => clearInterval(checkGis), 8000);
+  },
+
+  requestAuth() {
+    if (!DriveService.tokenClient) return;
+    if (DriveService.accessToken) {
+      DriveService.tokenClient.requestAccessToken({ prompt: '' });
+    } else {
+      DriveService.tokenClient.requestAccessToken({ prompt: 'consent' });
+    }
+  },
+
+  logout() {
+    if (DriveService.accessToken && window.google && window.google.accounts && window.google.accounts.oauth2) {
+      google.accounts.oauth2.revoke(DriveService.accessToken);
+    }
+    DriveService.accessToken = null;
+    DriveService.folderIds = { root: null, cotizaciones: null, facturas: null };
+    if (window.gapi && gapi.client) gapi.client.setToken(null);
+    sessionStorage.removeItem('fixit_gtoken');
+  },
+
+  isAuthenticated() { return !!DriveService.accessToken; },
+
+  async findFolder(name, parentId) {
+    let q = "name='" + name + "' and mimeType='application/vnd.google-apps.folder' and trashed=false";
+    if (parentId) q += " and '" + parentId + "' in parents";
+    const resp = await gapi.client.drive.files.list({ q: q, fields: 'files(id,name)', spaces: 'drive' });
+    return (resp.result.files && resp.result.files[0]) || null;
+  },
+
+  async createFolder(name, parentId) {
+    const metadata = { name: name, mimeType: 'application/vnd.google-apps.folder' };
+    if (parentId) metadata.parents = [parentId];
+    const resp = await gapi.client.drive.files.create({ resource: metadata, fields: 'id' });
+    return resp.result.id;
+  },
+
+  async ensureFolderStructure() {
+    let root = await DriveService.findFolder(FIXIT_FOLDER_NAME);
+    DriveService.folderIds.root = root ? root.id : await DriveService.createFolder(FIXIT_FOLDER_NAME);
+    let cot = await DriveService.findFolder(COT_FOLDER_NAME, DriveService.folderIds.root);
+    DriveService.folderIds.cotizaciones = cot ? cot.id : await DriveService.createFolder(COT_FOLDER_NAME, DriveService.folderIds.root);
+    let fac = await DriveService.findFolder(FAC_FOLDER_NAME, DriveService.folderIds.root);
+    DriveService.folderIds.facturas = fac ? fac.id : await DriveService.createFolder(FAC_FOLDER_NAME, DriveService.folderIds.root);
+    return DriveService.folderIds;
+  },
+
+  async listCotizaciones() {
+    if (!DriveService.folderIds.cotizaciones) await DriveService.ensureFolderStructure();
+    const resp = await gapi.client.drive.files.list({
+      q: "'" + DriveService.folderIds.cotizaciones + "' in parents and trashed=false and mimeType='application/json'",
+      fields: 'files(id,name,modifiedTime,createdTime)',
+      orderBy: 'createdTime desc',
+      pageSize: 200,
+    });
+    return resp.result.files || [];
+  },
+
+  async readFile(fileId) {
+    const resp = await gapi.client.drive.files.get({ fileId: fileId, alt: 'media' });
+    return resp.result;
+  },
+
+  async saveCotizacion(data, existingFileId) {
+    if (!DriveService.folderIds.cotizaciones) await DriveService.ensureFolderStructure();
+    const content = JSON.stringify(data, null, 2);
+    if (existingFileId) {
+      const resp = await fetch('https://www.googleapis.com/upload/drive/v3/files/' + existingFileId + '?uploadType=media', {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + DriveService.accessToken, 'Content-Type': 'application/json' },
+        body: content,
+      });
+      return await resp.json();
+    } else {
+      const metadata = { name: data.id + '.json', parents: [DriveService.folderIds.cotizaciones], mimeType: 'application/json' };
+      const form = new FormData();
+      form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+      form.append('file', new Blob([content], { type: 'application/json' }));
+      const resp = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + DriveService.accessToken },
+        body: form,
+      });
+      return await resp.json();
+    }
+  },
+
+  async deleteCotizacion(fileId) {
+    await gapi.client.drive.files.delete({ fileId: fileId });
+  },
+
+  async uploadAttachment(cotId, file) {
+    if (!DriveService.folderIds.facturas) await DriveService.ensureFolderStructure();
+    const fileName = cotId + '_' + file.name;
+    const metadata = { name: fileName, parents: [DriveService.folderIds.facturas] };
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', file);
+    const resp = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,size,createdTime,webViewLink,thumbnailLink', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + DriveService.accessToken },
+      body: form,
+    });
+    return await resp.json();
+  },
+
+  async listAttachments(cotId) {
+    if (!DriveService.folderIds.facturas) await DriveService.ensureFolderStructure();
+    const resp = await gapi.client.drive.files.list({
+      q: "'" + DriveService.folderIds.facturas + "' in parents and trashed=false and name contains '" + cotId + "_'",
+      fields: 'files(id,name,mimeType,size,createdTime,webViewLink,thumbnailLink)',
+      orderBy: 'createdTime desc',
+    });
+    return resp.result.files || [];
+  },
+
+  async deleteAttachment(fileId) {
+    await gapi.client.drive.files.delete({ fileId: fileId });
+  },
+
+  async getNextCotId() {
+    const files = await DriveService.listCotizaciones();
+    const year = new Date().getFullYear();
+    let maxNum = 0;
+    for (let i = 0; i < files.length; i++) {
+      const match = files[i].name.match(/COT-(\d{4})-(\d{3})\.json/);
+      if (match && parseInt(match[1]) === year) {
+        maxNum = Math.max(maxNum, parseInt(match[2]));
+      }
+    }
+    const num = String(maxNum + 1).padStart(3, '0');
+    return 'COT-' + year + '-' + num;
+  },
+};
+
+/* ================================================================
+   HOOK: useGoogleDrive
+   ================================================================ */
+function useGoogleDrive() {
+  const [driveStatus, setDriveStatus] = useState('loading');
+  const [cotizaciones, setCotizaciones] = useState([]);
+  const [loadingCots, setLoadingCots] = useState(false);
+  const [savingCot, setSavingCot] = useState(false);
+  const [notification, setNotification] = useState(null);
+
+  const notify = useCallback(function(msg, type, duration) {
+    type = type || 'info';
+    duration = duration || 3000;
+    setNotification({ msg: msg, type: type });
+    setTimeout(function() { setNotification(null); }, duration);
+  }, []);
+
+  useEffect(function() {
+    (async function() {
+      try {
+        var status = await DriveService.init();
+        DriveService.initTokenClient(async function(result) {
+          if (result.success) {
+            setDriveStatus('connected');
+            try { await DriveService.ensureFolderStructure(); } catch (e) { console.error('Folder setup error:', e); }
+          } else {
+            setDriveStatus('ready');
+          }
+        });
+        if (status === 'restored') {
+          setDriveStatus('connected');
+          try { await DriveService.ensureFolderStructure(); } catch (e) {
+            setDriveStatus('ready');
+            sessionStorage.removeItem('fixit_gtoken');
+            DriveService.accessToken = null;
+          }
+        } else if (status === 'unavailable') {
+          setDriveStatus('unavailable');
+        } else {
+          setDriveStatus('ready');
+        }
+      } catch (e) {
+        console.error('Drive init error:', e);
+        setDriveStatus('unavailable');
+      }
+    })();
+  }, []);
+
+  var login = useCallback(function() {
+    if (driveStatus === 'unavailable') { notify('Google API no disponible', 'warning'); return; }
+    setDriveStatus('loading');
+    DriveService.requestAuth();
+  }, [driveStatus, notify]);
+
+  var logout = useCallback(function() {
+    DriveService.logout();
+    setDriveStatus('ready');
+    setCotizaciones([]);
+    notify('Sesion cerrada', 'info');
+  }, [notify]);
+
+  var refreshCotizaciones = useCallback(async function() {
+    if (!DriveService.isAuthenticated()) return;
+    setLoadingCots(true);
+    try {
+      var files = await DriveService.listCotizaciones();
+      var loaded = [];
+      for (var i = 0; i < files.length; i++) {
+        try {
+          var data = await DriveService.readFile(files[i].id);
+          loaded.push(Object.assign({}, data, { _fileId: files[i].id, _modifiedTime: files[i].modifiedTime }));
+        } catch (e) { console.warn('Could not read:', files[i].name); }
+      }
+      setCotizaciones(loaded);
+    } catch (e) {
+      console.error('Error loading cotizaciones:', e);
+      notify('Error al cargar cotizaciones', 'danger');
+    }
+    setLoadingCots(false);
+  }, [notify]);
+
+  var saveCotizacion = useCallback(async function(data, existingFileId) {
+    if (!DriveService.isAuthenticated()) { notify('Conectate a Google Drive primero', 'warning'); return null; }
+    setSavingCot(true);
+    try {
+      var cotData = Object.assign({}, data);
+      if (!existingFileId) {
+        cotData.id = await DriveService.getNextCotId();
+        cotData.fechaCreacion = new Date().toISOString();
+        cotData.estado = cotData.estado || 'borrador';
+      }
+      cotData.fechaModificacion = new Date().toISOString();
+      var result = await DriveService.saveCotizacion(cotData, existingFileId);
+      await refreshCotizaciones();
+      notify(existingFileId ? 'Cotizacion ' + cotData.id + ' actualizada' : 'Cotizacion ' + cotData.id + ' guardada', 'success');
+      setSavingCot(false);
+      return Object.assign({}, cotData, { _fileId: result.id || existingFileId });
+    } catch (e) {
+      console.error('Error saving:', e);
+      notify('Error al guardar cotizacion', 'danger');
+      setSavingCot(false);
+      return null;
+    }
+  }, [notify, refreshCotizaciones]);
+
+  var deleteCotizacion = useCallback(async function(fileId) {
+    if (!DriveService.isAuthenticated()) return;
+    try {
+      await DriveService.deleteCotizacion(fileId);
+      await refreshCotizaciones();
+      notify('Cotizacion eliminada', 'info');
+    } catch (e) { notify('Error al eliminar cotizacion', 'danger'); }
+  }, [notify, refreshCotizaciones]);
+
+  var uploadAttachment = useCallback(async function(cotId, file) {
+    if (!DriveService.isAuthenticated()) { notify('Conectate a Google Drive primero', 'warning'); return null; }
+    try {
+      var result = await DriveService.uploadAttachment(cotId, file);
+      notify('Archivo "' + file.name + '" subido', 'success');
+      return result;
+    } catch (e) { notify('Error al subir archivo', 'danger'); return null; }
+  }, [notify]);
+
+  var listAttachments = useCallback(async function(cotId) {
+    if (!DriveService.isAuthenticated()) return [];
+    try { return await DriveService.listAttachments(cotId); } catch (e) { return []; }
+  }, []);
+
+  var deleteAttachment = useCallback(async function(fileId) {
+    if (!DriveService.isAuthenticated()) return;
+    try {
+      await DriveService.deleteAttachment(fileId);
+      notify('Archivo eliminado', 'info');
+    } catch (e) { notify('Error al eliminar archivo', 'danger'); }
+  }, [notify]);
+
+  return {
+    driveStatus: driveStatus, login: login, logout: logout,
+    cotizaciones: cotizaciones, loadingCots: loadingCots, savingCot: savingCot,
+    refreshCotizaciones: refreshCotizaciones, saveCotizacion: saveCotizacion, deleteCotizacion: deleteCotizacion,
+    uploadAttachment: uploadAttachment, listAttachments: listAttachments, deleteAttachment: deleteAttachment,
+    notification: notification, notify: notify,
+  };
+}
+
+/* ================================================================
+   EXISTING CODE — Constants, helpers, styles
+   ================================================================ */
 const DEFAULT_PARAMS = {
   usdClp: 950, arancel: 6, arancelActivo: true, iva: 19, ivaActivo: true,
   ivaRecuperable: true, dhlFee: 35,
@@ -56,12 +490,12 @@ const TABS = [
   { id: "pricing", label: "Calculadora" },
   { id: "dashboard", label: "Dashboard" },
   { id: "comparador", label: "Aliexpress vs Alibaba" },
-  { id: "escalamiento", label: "¿Cuándo escalo?" },
+  { id: "escalamiento", label: "\u00bfCu\u00e1ndo escalo?" },
   { id: "publicidad", label: "Publicidad" },
 ];
 
-const fmt = (n, d = 0) => isNaN(n) || !isFinite(n) ? "—" : Math.round(n).toLocaleString("es-CL", { minimumFractionDigits: d, maximumFractionDigits: d });
-const pct = (n) => isNaN(n) || !isFinite(n) ? "—" : n.toFixed(1) + "%";
+const fmt = (n, d) => { d = d || 0; return isNaN(n) || !isFinite(n) ? "\u2014" : Math.round(n).toLocaleString("es-CL", { minimumFractionDigits: d, maximumFractionDigits: d }); };
+const pct = (n) => isNaN(n) || !isFinite(n) ? "\u2014" : n.toFixed(1) + "%";
 
 const S = {
   card: { background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", padding: "1rem 1.25rem", marginBottom: "1rem" },
@@ -71,13 +505,25 @@ const S = {
   sub: { fontSize: 11, color: "var(--color-text-tertiary)", margin: "3px 0 0" },
   row: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 13 },
   sectionLabel: { fontSize: 11, color: "var(--color-text-tertiary)", textTransform: "uppercase", letterSpacing: "0.07em", margin: "0 0 10px" },
-  pill: (c) => ({ fontSize: 11, padding: "2px 9px", borderRadius: 100, display: "inline-block", fontWeight: 500, background: `var(--color-background-${c})`, color: `var(--color-text-${c})` }),
-  alert: (c) => ({ padding: "10px 14px", borderRadius: "var(--border-radius-md)", marginBottom: 8, background: `var(--color-background-${c})` }),
+  pill: (c) => ({ fontSize: 11, padding: "2px 9px", borderRadius: 100, display: "inline-block", fontWeight: 500, background: "var(--color-background-" + c + ")", color: "var(--color-text-" + c + ")" }),
+  alert: (c) => ({ padding: "10px 14px", borderRadius: "var(--border-radius-md)", marginBottom: 8, background: "var(--color-background-" + c + ")" }),
   input: { background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", color: "var(--color-text-primary)", fontSize: 14, fontFamily: "inherit", padding: "7px 10px", outline: "none", width: "100%", boxSizing: "border-box" },
   divider: { border: "none", borderTop: "0.5px solid var(--color-border-tertiary)", margin: "0.85rem 0" },
 };
 
-function Field({ label, value, onChange, unit, hint, type = "number" }) {
+const ESTADO_CONFIG = {
+  borrador: { label: 'Borrador', color: 'secondary', css: 'cot-status-borrador' },
+  confirmada: { label: 'Confirmada', color: 'info', css: 'cot-status-confirmada' },
+  importada: { label: 'Importada', color: 'warning', css: 'cot-status-importada' },
+  completada: { label: 'Completada', color: 'success', css: 'cot-status-completada' },
+};
+const ESTADOS = ['borrador', 'confirmada', 'importada', 'completada'];
+
+/* ================================================================
+   COMPONENTS — Field, Toggle, UsdClpField, ParamsPanel
+   ================================================================ */
+function Field({ label, value, onChange, unit, hint, type }) {
+  type = type || "number";
   return (
     <div style={{ marginBottom: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
@@ -97,7 +543,7 @@ function Toggle({ label, value, onChange }) {
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
       <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>{label}</span>
       <button onClick={() => onChange(!value)} style={{ background: value ? "var(--color-background-success)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "3px 12px", fontSize: 12, color: value ? "var(--color-text-success)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>
-        {value ? "Sí" : "No"}
+        {value ? "S\u00ed" : "No"}
       </button>
     </div>
   );
@@ -112,36 +558,13 @@ function UsdClpField({ params, setParams }) {
   const fetchRate = useCallback(async () => {
     setStatus("loading");
     const apis = [
-      async () => {
-        const r = await fetch("https://corsproxy.io/?url=https://mindicador.cl/api/dolar");
-        if (!r.ok) throw new Error();
-        const d = await r.json();
-        return { rate: Math.round(d.serie[0].valor), date: d.serie[0].fecha.split("T")[0], src: "Banco Central" };
-      },
-      async () => {
-        const r = await fetch("https://api.frankfurter.dev/v1/latest?base=USD&symbols=CLP");
-        if (!r.ok) throw new Error();
-        const d = await r.json();
-        if (!d.rates?.CLP) throw new Error();
-        return { rate: Math.round(d.rates.CLP), date: d.date, src: "Frankfurter" };
-      },
-      async () => {
-        const r = await fetch("https://open.exchangerate-api.com/v6/latest/USD");
-        if (!r.ok) throw new Error();
-        const d = await r.json();
-        return { rate: Math.round(d.rates.CLP), date: new Date(d.time_last_update_utc).toISOString().split("T")[0], src: "ExchangeRate-API" };
-      },
+      async () => { const r = await fetch("https://corsproxy.io/?url=https://mindicador.cl/api/dolar"); if (!r.ok) throw new Error(); const d = await r.json(); return { rate: Math.round(d.serie[0].valor), date: d.serie[0].fecha.split("T")[0], src: "Banco Central" }; },
+      async () => { const r = await fetch("https://api.frankfurter.dev/v1/latest?base=USD&symbols=CLP"); if (!r.ok) throw new Error(); const d = await r.json(); if (!d.rates || !d.rates.CLP) throw new Error(); return { rate: Math.round(d.rates.CLP), date: d.date, src: "Frankfurter" }; },
+      async () => { const r = await fetch("https://open.exchangerate-api.com/v6/latest/USD"); if (!r.ok) throw new Error(); const d = await r.json(); return { rate: Math.round(d.rates.CLP), date: new Date(d.time_last_update_utc).toISOString().split("T")[0], src: "ExchangeRate-API" }; },
     ];
     let success = false;
     for (const api of apis) {
-      try {
-        const { rate, date, src } = await api();
-        setAutoRate(rate); setAutoDate(`${date} · ${src}`);
-        if (!manualMode) setParams(p => ({ ...p, usdClp: rate }));
-        setStatus("ok");
-        success = true;
-        break;
-      } catch { continue; }
+      try { const { rate, date, src } = await api(); setAutoRate(rate); setAutoDate(date + " \u00b7 " + src); if (!manualMode) setParams(p => ({ ...p, usdClp: rate })); setStatus("ok"); success = true; break; } catch (e) { continue; }
     }
     if (!success) setStatus("error");
   }, [manualMode, setParams]);
@@ -149,23 +572,23 @@ function UsdClpField({ params, setParams }) {
   return (
     <div style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "10px 12px", marginBottom: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-        <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>USD → CLP</span>
+        <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>USD &rarr; CLP</span>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           {status === "loading" && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>obteniendo...</span>}
-          {status === "ok" && !manualMode && <span style={{ fontSize: 10, color: "var(--color-text-success)" }}>auto · {autoDate}</span>}
-          {status === "error" && <span style={{ fontSize: 10, color: "var(--color-text-danger)" }}>sin conexión</span>}
+          {status === "ok" && !manualMode && <span style={{ fontSize: 10, color: "var(--color-text-success)" }}>auto &middot; {autoDate}</span>}
+          {status === "error" && <span style={{ fontSize: 10, color: "var(--color-text-danger)" }}>sin conexi&oacute;n</span>}
           {manualMode && <span style={{ fontSize: 10, color: "var(--color-text-warning)" }}>manual</span>}
           {manualMode && autoRate && (
             <button onClick={() => { setManualMode(false); setParams(p => ({ ...p, usdClp: autoRate })); }} style={{ fontSize: 10, padding: "1px 7px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, cursor: "pointer", color: "var(--color-text-secondary)", fontFamily: "inherit" }}>usar auto</button>
           )}
-          <button onClick={fetchRate} style={{ fontSize: 10, padding: "1px 7px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, cursor: "pointer", color: "var(--color-text-secondary)", fontFamily: "inherit" }}>↻</button>
+          <button onClick={fetchRate} style={{ fontSize: 10, padding: "1px 7px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, cursor: "pointer", color: "var(--color-text-secondary)", fontFamily: "inherit" }}>&orarr;</button>
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <input type="number" value={params.usdClp} onChange={(e) => { setManualMode(true); setParams(p => ({ ...p, usdClp: parseFloat(e.target.value) || 0 })); }} style={{ ...S.input, fontSize: 18, fontWeight: 500 }} />
         <span style={{ fontSize: 12, color: "var(--color-text-tertiary)", whiteSpace: "nowrap" }}>CLP</span>
       </div>
-      {autoRate && manualMode && <p style={{ fontSize: 10, color: "var(--color-text-tertiary)", margin: "4px 0 0" }}>Último auto: ${autoRate.toLocaleString("es-CL")} ({autoDate})</p>}
+      {autoRate && manualMode && <p style={{ fontSize: 10, color: "var(--color-text-tertiary)", margin: "4px 0 0" }}>&Uacute;ltimo auto: ${autoRate.toLocaleString("es-CL")} ({autoDate})</p>}
     </div>
   );
 }
@@ -174,10 +597,10 @@ function ParamsPanel({ params, setParams }) {
   const set = (k, v) => setParams(p => ({ ...p, [k]: v }));
   return (
     <div style={{ ...S.card, marginBottom: 0 }}>
-      <p style={S.sectionLabel}>parámetros globales</p>
+      <p style={S.sectionLabel}>par&aacute;metros globales</p>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 16 }}>
         <div>
-          <p style={{ ...S.sectionLabel, marginBottom: 8 }}>importación</p>
+          <p style={{ ...S.sectionLabel, marginBottom: 8 }}>importaci&oacute;n</p>
           <UsdClpField params={params} setParams={setParams} />
           <Field label="Honorarios DHL" value={params.dhlFee} onChange={v => set("dhlFee", v)} unit="USD" hint="Por despacho, fuera del CIF" />
           <div style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "10px 12px", marginTop: 8 }}>
@@ -185,36 +608,36 @@ function ParamsPanel({ params, setParams }) {
               <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Recargo adquirencia (tarjeta)</span>
               <button onClick={() => set("recargoTarjetaActivo", !params.recargoTarjetaActivo)} style={{ background: params.recargoTarjetaActivo ? "var(--color-background-success)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "2px 10px", fontSize: 11, color: params.recargoTarjetaActivo ? "var(--color-text-success)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>{params.recargoTarjetaActivo ? "activo" : "inactivo"}</button>
             </div>
-            {params.recargoTarjetaActivo ? <Field label="" value={params.recargoTarjeta} onChange={v => set("recargoTarjeta", v)} unit="% sobre CIF" hint="Típico: 1.5–3%" /> : <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: 0 }}>No se aplica recargo por pago con tarjeta</p>}
+            {params.recargoTarjetaActivo ? <Field label="" value={params.recargoTarjeta} onChange={v => set("recargoTarjeta", v)} unit="% sobre CIF" hint="T&iacute;pico: 1.5\u20133%" /> : <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: 0 }}>No se aplica recargo por pago con tarjeta</p>}
           </div>
           <div style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "10px 12px", marginTop: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
               <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Arancel aduanero</span>
               <button onClick={() => set("arancelActivo", !params.arancelActivo)} style={{ background: params.arancelActivo ? "var(--color-background-success)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "2px 10px", fontSize: 11, color: params.arancelActivo ? "var(--color-text-success)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>{params.arancelActivo ? "activo" : "inactivo"}</button>
             </div>
-            {params.arancelActivo ? <Field label="" value={params.arancel} onChange={v => set("arancel", v)} unit="% sobre CIF" hint="Default 6% · TLC China: 0%" /> : <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: 0 }}>No se aplica arancel (ej. TLC Chile-China)</p>}
+            {params.arancelActivo ? <Field label="" value={params.arancel} onChange={v => set("arancel", v)} unit="% sobre CIF" hint="Default 6% &middot; TLC China: 0%" /> : <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: 0 }}>No se aplica arancel (ej. TLC Chile-China)</p>}
           </div>
           <div style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "10px 12px", marginTop: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>IVA importación</span>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>IVA importaci&oacute;n</span>
               <button onClick={() => set("ivaActivo", !params.ivaActivo)} style={{ background: params.ivaActivo ? "var(--color-background-success)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "2px 10px", fontSize: 11, color: params.ivaActivo ? "var(--color-text-success)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>{params.ivaActivo ? "activo" : "inactivo"}</button>
             </div>
             {params.ivaActivo ? (
               <>
                 <Field label="" value={params.iva} onChange={v => set("iva", v)} unit="% sobre CIF + arancel" hint="Default 19%" />
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
-                  <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>¿Es recuperable? (empresa con RUT)</span>
-                  <button onClick={() => set("ivaRecuperable", !params.ivaRecuperable)} style={{ background: params.ivaRecuperable ? "var(--color-background-info)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "2px 10px", fontSize: 11, color: params.ivaRecuperable ? "var(--color-text-info)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>{params.ivaRecuperable ? "sí — crédito fiscal" : "no — es costo"}</button>
+                  <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>&iquest;Es recuperable? (empresa con RUT)</span>
+                  <button onClick={() => set("ivaRecuperable", !params.ivaRecuperable)} style={{ background: params.ivaRecuperable ? "var(--color-background-info)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "2px 10px", fontSize: 11, color: params.ivaRecuperable ? "var(--color-text-info)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>{params.ivaRecuperable ? "s\u00ed \u2014 cr\u00e9dito fiscal" : "no \u2014 es costo"}</button>
                 </div>
               </>
-            ) : <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: 0 }}>No se aplica IVA de importación</p>}
+            ) : <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: 0 }}>No se aplica IVA de importaci&oacute;n</p>}
           </div>
         </div>
         <div>
           <p style={{ ...S.sectionLabel, marginBottom: 8 }}>mercado libre</p>
           <div style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "10px 12px", marginBottom: 10 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Comisión ML</span>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Comisi&oacute;n ML</span>
               <button onClick={() => set("mlComisionFijaActiva", !params.mlComisionFijaActiva)} style={{ background: params.mlComisionFijaActiva ? "var(--color-background-warning)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "2px 10px", fontSize: 11, color: params.mlComisionFijaActiva ? "var(--color-text-warning)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>
                 {params.mlComisionFijaActiva ? "monto fijo activo" : "agregar monto fijo"}
               </button>
@@ -222,7 +645,7 @@ function ParamsPanel({ params, setParams }) {
             <Field label="" value={params.mlComision} onChange={v => set("mlComision", v)} unit="% sobre precio venta" />
             {params.mlComisionFijaActiva && (
               <div style={{ marginTop: 6, paddingTop: 8, borderTop: "0.5px solid var(--color-border-tertiary)" }}>
-                <Field label="Cargo fijo adicional" value={params.mlComisionFija} onChange={v => set("mlComisionFija", v)} unit="CLP" hint="Se suma al % de comisión" />
+                <Field label="Cargo fijo adicional" value={params.mlComisionFija} onChange={v => set("mlComisionFija", v)} unit="CLP" hint="Se suma al % de comisi&oacute;n" />
               </div>
             )}
           </div>
@@ -235,11 +658,175 @@ function ParamsPanel({ params, setParams }) {
   );
 }
 
-function TabPricing({ params }) {
+/* ================================================================
+   COMPONENT: Notification Toast
+   ================================================================ */
+function NotificationToast({ notification }) {
+  if (!notification) return null;
+  const c = notification.type || 'info';
+  return (
+    <div style={{ position: 'fixed', bottom: 20, right: 20, zIndex: 200, padding: '12px 20px', borderRadius: 'var(--border-radius-md)', background: 'var(--color-background-' + c + ')', border: '1px solid var(--color-border-' + c + ')', color: 'var(--color-text-' + c + ')', fontSize: 13, fontWeight: 500, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', maxWidth: 350, animation: 'toastIn 0.2s ease' }}>
+      {notification.msg}
+    </div>
+  );
+}
+
+/* ================================================================
+   COMPONENT: Attachments Section
+   ================================================================ */
+function AttachmentsSection({ cotId, drive }) {
+  const [attachments, setAttachments] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const loadAttachments = useCallback(async function() {
+    if (!cotId) return;
+    var files = await drive.listAttachments(cotId);
+    setAttachments(files);
+  }, [cotId, drive]);
+
+  useEffect(function() { loadAttachments(); }, [loadAttachments]);
+
+  const handleFiles = async (fileList) => {
+    if (!fileList.length) return;
+    setUploading(true);
+    const allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+    for (let i = 0; i < fileList.length; i++) {
+      const file = fileList[i];
+      if (allowed.indexOf(file.type) === -1) { drive.notify('Tipo no soportado: ' + file.type, 'warning'); continue; }
+      if (file.size > 10 * 1024 * 1024) { drive.notify('Archivo demasiado grande (max 10MB)', 'warning'); continue; }
+      await drive.uploadAttachment(cotId, file);
+    }
+    await loadAttachments();
+    setUploading(false);
+  };
+
+  const isImage = (mimeType) => mimeType && mimeType.indexOf('image/') === 0;
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <p style={S.sectionLabel}>documentos adjuntos</p>
+      <div
+        className={'file-drop-zone' + (dragOver ? ' dragover' : '')}
+        onClick={() => fileInputRef.current && fileInputRef.current.click()}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(Array.from(e.dataTransfer.files)); }}
+      >
+        <input ref={fileInputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" multiple style={{ display: 'none' }} onChange={(e) => handleFiles(Array.from(e.target.files))} />
+        {uploading
+          ? <span style={{ fontSize: 12, color: 'var(--color-text-warning)' }}>Subiendo...</span>
+          : <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Arrastra archivos o haz clic (PDF, JPG, PNG &middot; max 10MB)</span>
+        }
+      </div>
+      {attachments.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          {attachments.map(function(f) {
+            return (
+              <div key={f.id} className="file-attachment">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+                  {isImage(f.mimeType)
+                    ? <div style={{ width: 32, height: 32, borderRadius: 4, background: 'var(--color-background-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: 'var(--color-text-tertiary)', flexShrink: 0 }}>IMG</div>
+                    : <div style={{ width: 32, height: 32, borderRadius: 4, background: 'var(--color-background-danger)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: 'var(--color-text-danger)', flexShrink: 0 }}>PDF</div>
+                  }
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name.replace(/^COT-\d{4}-\d{3}_/, '')}</div>
+                    <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>{f.createdTime ? new Date(f.createdTime).toLocaleDateString('es-CL') : ''}</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                  {f.webViewLink && <a href={f.webViewLink} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, padding: '3px 8px', background: 'var(--color-background-secondary)', borderRadius: 'var(--border-radius-sm)', color: 'var(--color-text-info)', textDecoration: 'none', border: '1px solid var(--color-border-tertiary)' }}>ver</a>}
+                  <button onClick={() => drive.deleteAttachment(f.id).then(loadAttachments)} style={{ fontSize: 11, padding: '3px 8px', background: 'var(--color-background-danger)', borderRadius: 'var(--border-radius-sm)', color: 'var(--color-text-danger)', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>&times;</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================
+   COMPONENT: Cotizaciones Side Panel
+   ================================================================ */
+function CotizacionesPanel({ open, onClose, cotizaciones, loadingCots, onSelect, activeCotId, onRefresh }) {
+  const [search, setSearch] = useState('');
+  const [filterEstado, setFilterEstado] = useState('todos');
+
+  const filtered = cotizaciones.filter(function(c) {
+    if (filterEstado !== 'todos' && c.estado !== filterEstado) return false;
+    if (search) {
+      var s = search.toLowerCase();
+      return ((c.id || '').toLowerCase().indexOf(s) !== -1 || (c.producto && c.producto.nombre || '').toLowerCase().indexOf(s) !== -1);
+    }
+    return true;
+  });
+
+  return (
+    <>
+      <div className={'cot-panel-overlay' + (open ? ' open' : '')} onClick={onClose} />
+      <div className={'cot-panel' + (open ? ' open' : '')}>
+        <div className="cot-panel-header">
+          <div>
+            <div style={{ fontWeight: 500, fontSize: 15 }}>Cotizaciones</div>
+            <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>{cotizaciones.length} guardadas</div>
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={onRefresh} className="btn-cot btn-cot-neutral" title="Recargar">&orarr;</button>
+            <button onClick={onClose} className="btn-cot btn-cot-neutral">&times;</button>
+          </div>
+        </div>
+        <div style={{ padding: '12px 20px 0', flexShrink: 0 }}>
+          <input className="cot-search" placeholder="Buscar por ID o nombre..." value={search} onChange={e => setSearch(e.target.value)} />
+          <div style={{ display: 'flex', gap: 4, marginTop: 8, flexWrap: 'wrap' }}>
+            {['todos'].concat(ESTADOS).map(function(e) {
+              return <button key={e} className={'cot-filter-btn' + (filterEstado === e ? ' active' : '')} onClick={() => setFilterEstado(e)}>{e === 'todos' ? 'Todos' : ESTADO_CONFIG[e].label}</button>;
+            })}
+          </div>
+        </div>
+        <div className="cot-panel-body">
+          {loadingCots && <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)', textAlign: 'center', padding: 20 }}>Cargando cotizaciones...</p>}
+          {!loadingCots && filtered.length === 0 && (
+            <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)', textAlign: 'center', padding: 20 }}>
+              {cotizaciones.length === 0 ? 'No hay cotizaciones guardadas' : 'No se encontraron resultados'}
+            </p>
+          )}
+          {filtered.map(function(c) {
+            var est = ESTADO_CONFIG[c.estado] || ESTADO_CONFIG.borrador;
+            return (
+              <div key={c._fileId} className={'cot-item' + (activeCotId === c._fileId ? ' active' : '')} onClick={() => { onSelect(c); onClose(); }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ fontWeight: 500, fontSize: 13 }}>{c.id}</span>
+                  <span className={'cot-status ' + est.css}>{est.label}</span>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-primary)', marginBottom: 4 }}>{(c.producto && c.producto.nombre) || 'Sin nombre'}</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                  <span>{c.fechaCreacion ? new Date(c.fechaCreacion).toLocaleDateString('es-CL') : ''}</span>
+                  {c.resultados && c.resultados.precioSugerido && <span style={{ color: 'var(--color-text-success)', fontWeight: 500 }}>${fmt(c.resultados.precioSugerido)}</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ================================================================
+   TAB: Calculadora (pricing) — CON COTIZACIONES
+   ================================================================ */
+function TabPricing({ params, drive }) {
   const [prod, setProd] = useState({ nombre: "Nuevo producto", precioAli: 5, unidades: 50, flete: 80 });
   const [precioMinConAds, setPrecioMinConAds] = useState(false);
   const [precioManual, setPrecioManual] = useState(0);
   const set = (k, v) => setProd(p => ({ ...p, [k]: v }));
+
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [activeCot, setActiveCot] = useState(null);
+  const [savedSnapshot, setSavedSnapshot] = useState(null);
 
   const u = prod.unidades || 1;
   const precioUnitUSD = prod.precioAli, fleteUnitUSD = prod.flete / u;
@@ -276,14 +863,110 @@ function TabPricing({ params }) {
   const breakdown = [
     { label: "Producto Alibaba", clp: precioUnitUSD * params.usdClp, color: "#378ADD", note: "" },
     { label: "Flete por unidad (CIF)", clp: fleteUnitUSD * params.usdClp, color: "#6366f1", note: "" },
-    { label: `Recargo tarjeta (${params.recargoTarjeta}% CIF)`, clp: recargoCLP, color: "#f97316", note: params.recargoTarjetaActivo ? "" : "inactivo" },
-    { label: `Arancel aduanero (${params.arancel}% CIF)`, clp: arancelCLP, color: "#f59e0b", note: params.arancelActivo ? "" : "inactivo" },
-    { label: `IVA importación (${params.iva}%)`, clp: ivaCostoCLP, color: "#ef4444", note: !params.ivaActivo ? "inactivo" : params.ivaRecuperable ? "recuperable — no es costo" : "" },
+    { label: "Recargo tarjeta (" + params.recargoTarjeta + "% CIF)", clp: recargoCLP, color: "#f97316", note: params.recargoTarjetaActivo ? "" : "inactivo" },
+    { label: "Arancel aduanero (" + params.arancel + "% CIF)", clp: arancelCLP, color: "#f59e0b", note: params.arancelActivo ? "" : "inactivo" },
+    { label: "IVA importaci\u00f3n (" + params.iva + "%)", clp: ivaCostoCLP, color: "#ef4444", note: !params.ivaActivo ? "inactivo" : params.ivaRecuperable ? "recuperable \u2014 no es costo" : "" },
     { label: "Honorarios DHL", clp: dhlUnitCLP, color: "#8b5cf6", note: "" },
-  ].filter(b => b.clp > 0 || b.note === "inactivo" || b.note === "recuperable — no es costo");
+  ].filter(b => b.clp > 0 || b.note === "inactivo" || b.note === "recuperable \u2014 no es costo");
+
+  const buildCotData = () => ({
+    producto: { ...prod },
+    precioManual: precioManual,
+    precioMinConAds: precioMinConAds,
+    resultados: { cifCLP: cifCLP, costoBodegaCLP: costoBodegaCLP, precioSugeridoCLP: precioSugeridoCLP, precioMinCLP: precioMinCLP, multiplicador: multiplicador, margenManualUnit: margenManualUnit, margenManualPct: margenManualPct, precioSugerido: precioSugeridoCLP },
+    parametrosSnapshot: { ...params },
+  });
+
+  const loadCotizacion = (cot) => {
+    if (cot.producto) {
+      setProd({ nombre: cot.producto.nombre || '', precioAli: cot.producto.precioAli || 0, unidades: cot.producto.unidades || 1, flete: cot.producto.flete || 0 });
+    }
+    if (cot.precioManual !== undefined) setPrecioManual(cot.precioManual);
+    if (cot.precioMinConAds !== undefined) setPrecioMinConAds(cot.precioMinConAds);
+    setActiveCot(cot);
+    setSavedSnapshot(cot);
+  };
+
+  const handleSave = async () => {
+    var data = buildCotData();
+    if (activeCot) { data.id = activeCot.id; data.fechaCreacion = activeCot.fechaCreacion; data.estado = activeCot.estado; }
+    var result = await drive.saveCotizacion(data, activeCot ? activeCot._fileId : null);
+    if (result) { setActiveCot(result); setSavedSnapshot(Object.assign({}, data, result)); }
+  };
+
+  const handleSaveAsNew = async () => {
+    var data = buildCotData();
+    data.estado = 'borrador';
+    var result = await drive.saveCotizacion(data, null);
+    if (result) { setActiveCot(result); setSavedSnapshot(Object.assign({}, data, result)); }
+  };
+
+  const handleUpdate = async () => {
+    if (!activeCot || !activeCot._fileId) return;
+    var data = Object.assign({}, buildCotData(), { id: activeCot.id, fechaCreacion: activeCot.fechaCreacion, estado: activeCot.estado });
+    var result = await drive.saveCotizacion(data, activeCot._fileId);
+    if (result) { setActiveCot(result); setSavedSnapshot(Object.assign({}, data, result)); }
+  };
+
+  const handleDiscard = () => { if (savedSnapshot) loadCotizacion(savedSnapshot); };
+
+  const handleEstadoChange = async (newEstado) => {
+    if (!activeCot || !activeCot._fileId) return;
+    var data = Object.assign({}, buildCotData(), { id: activeCot.id, fechaCreacion: activeCot.fechaCreacion, estado: newEstado });
+    var result = await drive.saveCotizacion(data, activeCot._fileId);
+    if (result) { setActiveCot(Object.assign({}, activeCot, result, { estado: newEstado })); setSavedSnapshot(Object.assign({}, data, result)); }
+  };
+
+  const handleNew = () => {
+    setProd({ nombre: "Nuevo producto", precioAli: 5, unidades: 50, flete: 80 });
+    setPrecioManual(0);
+    setPrecioMinConAds(false);
+    setActiveCot(null);
+    setSavedSnapshot(null);
+  };
+
+  const isConnected = drive.driveStatus === 'connected';
 
   return (
     <div>
+      {/* Cotizacion action bar */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          {isConnected && (
+            <>
+              <button className="btn-cot btn-cot-primary" onClick={() => setPanelOpen(true)}>Cargar cotizaci&oacute;n</button>
+              {!activeCot && <button className="btn-cot btn-cot-success" onClick={handleSave} disabled={drive.savingCot}>{drive.savingCot ? 'Guardando...' : 'Guardar cotizaci\u00f3n'}</button>}
+              {activeCot && (
+                <>
+                  <button className="btn-cot btn-cot-success" onClick={handleUpdate} disabled={drive.savingCot}>{drive.savingCot ? 'Guardando...' : 'Actualizar cotizaci\u00f3n'}</button>
+                  <button className="btn-cot btn-cot-warning" onClick={handleSaveAsNew} disabled={drive.savingCot}>Guardar como nueva</button>
+                  <button className="btn-cot btn-cot-neutral" onClick={handleDiscard}>Descartar cambios</button>
+                  <button className="btn-cot btn-cot-neutral" onClick={handleNew}>Nueva cotizaci&oacute;n</button>
+                </>
+              )}
+            </>
+          )}
+          {!isConnected && <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Con&eacute;ctate a Google Drive para guardar cotizaciones</span>}
+        </div>
+        {activeCot && (
+          <select className="status-dropdown" value={activeCot.estado || 'borrador'} onChange={e => handleEstadoChange(e.target.value)}>
+            {ESTADOS.map(function(e) { return <option key={e} value={e}>{ESTADO_CONFIG[e].label}</option>; })}
+          </select>
+        )}
+      </div>
+
+      {/* Active cotizacion banner */}
+      {activeCot && (
+        <div className="cot-banner">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-info)' }}>Editando {activeCot.id}</span>
+            <span className={'cot-status ' + (ESTADO_CONFIG[activeCot.estado || 'borrador'].css)}>{ESTADO_CONFIG[activeCot.estado || 'borrador'].label}</span>
+            {activeCot.fechaCreacion && <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>Creada: {new Date(activeCot.fechaCreacion).toLocaleDateString('es-CL')}</span>}
+          </div>
+        </div>
+      )}
+
+      {/* Main calculator grid */}
       <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 16 }}>
         <div>
           <div style={S.card}>
@@ -294,7 +977,7 @@ function TabPricing({ params }) {
             <Field label="Flete internacional total" value={prod.flete} onChange={v => set("flete", v)} unit="USD" hint="Entra al CIF" />
           </div>
           <div style={{ ...S.card, background: "var(--color-background-secondary)" }}>
-            <p style={S.sectionLabel}>cálculo CIF</p>
+            <p style={S.sectionLabel}>c&aacute;lculo CIF</p>
             <div style={S.row}><span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Precio unitario</span><span style={{ fontSize: 12 }}>${fmt(precioUnitUSD * params.usdClp)} <span style={{ color: "var(--color-text-tertiary)" }}>(USD {prod.precioAli})</span></span></div>
             <div style={S.row}><span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Flete por unidad</span><span style={{ fontSize: 12 }}>${fmt(fleteUnitUSD * params.usdClp)} <span style={{ color: "var(--color-text-tertiary)" }}>(USD {fleteUnitUSD.toFixed(2)})</span></span></div>
             <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontWeight: 500, fontSize: 13 }}><span>CIF por unidad</span><span style={{ color: "var(--color-text-info)" }}>${fmt(cifCLP)}</span></div>
@@ -308,8 +991,8 @@ function TabPricing({ params }) {
               { label: "Flete total", val: prod.flete * params.usdClp, color: "#6366f1" },
               params.recargoTarjetaActivo && { label: "Recargo tarjeta", val: recargoCLP * u, color: "#f97316" },
               params.arancelActivo && { label: "Arancel aduanero", val: arancelCLP * u, color: "#f59e0b" },
-              params.ivaActivo && !params.ivaRecuperable && { label: "IVA importación", val: ivaCostoCLP * u, color: "#ef4444" },
-              params.ivaActivo && params.ivaRecuperable && { label: "IVA importación", val: ivaBaseCLP * u, color: "#ef4444", note: "recuperable" },
+              params.ivaActivo && !params.ivaRecuperable && { label: "IVA importaci\u00f3n", val: ivaCostoCLP * u, color: "#ef4444" },
+              params.ivaActivo && params.ivaRecuperable && { label: "IVA importaci\u00f3n", val: ivaBaseCLP * u, color: "#ef4444", note: "recuperable" },
               { label: "Honorarios DHL", val: dhlUnitCLP * u, color: "#8b5cf6" },
             ].filter(Boolean).map(item => (
               <div key={item.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "0.5px solid var(--color-border-tertiary)", fontSize: 12 }}>
@@ -322,10 +1005,17 @@ function TabPricing({ params }) {
               </div>
             ))}
             <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontWeight: 500, fontSize: 13 }}>
-              <span>Total inversión pedido</span>
+              <span>Total inversi&oacute;n pedido</span>
               <span style={{ fontSize: 15 }}>${fmt(costoBodegaCLP * u)}</span>
             </div>
           </div>
+
+          {/* Attachments */}
+          {activeCot && isConnected && (
+            <div style={S.card}>
+              <AttachmentsSection cotId={activeCot.id} drive={drive} />
+            </div>
+          )}
         </div>
 
         <div>
@@ -345,8 +1035,8 @@ function TabPricing({ params }) {
                 </div>
                 <div style={{ textAlign: "right", display: "flex", alignItems: "center", gap: 8 }}>
                   {b.note && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)", fontStyle: "italic" }}>{b.note}</span>}
-                  <span style={{ fontWeight: 500, color: b.note === "inactivo" || b.note === "recuperable — no es costo" ? "var(--color-text-tertiary)" : "var(--color-text-primary)" }}>
-                    {b.note === "inactivo" ? "—" : b.note === "recuperable — no es costo" ? `$${fmt(ivaBaseCLP)} (no suma)` : `$${fmt(b.clp)}`}
+                  <span style={{ fontWeight: 500, color: b.note === "inactivo" || b.note === "recuperable \u2014 no es costo" ? "var(--color-text-tertiary)" : "var(--color-text-primary)" }}>
+                    {b.note === "inactivo" ? "\u2014" : b.note === "recuperable \u2014 no es costo" ? "$" + fmt(ivaBaseCLP) + " (no suma)" : "$" + fmt(b.clp)}
                   </span>
                 </div>
               </div>
@@ -357,30 +1047,30 @@ function TabPricing({ params }) {
           </div>
 
           <div style={S.card}>
-            <p style={S.sectionLabel}>distribución precio de venta sugerido</p>
+            <p style={S.sectionLabel}>distribuci&oacute;n precio de venta sugerido</p>
             {[
               { label: "Costo en bodega", amt: costoBodegaCLP, color: "info" },
-              { label: `Comisión ML (${params.mlComision}%)${params.mlComisionFijaActiva ? ` + $${fmt(comisionFija)} fijo` : ""}`, amt: comisionPctAmt + comisionFija, color: "warning" },
-              { label: `Full ML (${params.mlFull}%)`, amt: fullAmt, color: "warning" },
-              { label: `Publicidad (${params.mlAds}%)`, amt: adsAmt, color: "danger" },
-              { label: `Tu margen (${params.margenObjetivo}%)`, amt: margenAmt, color: "success" },
+              { label: "Comisi\u00f3n ML (" + params.mlComision + "%)" + (params.mlComisionFijaActiva ? " + $" + fmt(comisionFija) + " fijo" : ""), amt: comisionPctAmt + comisionFija, color: "warning" },
+              { label: "Full ML (" + params.mlFull + "%)", amt: fullAmt, color: "warning" },
+              { label: "Publicidad (" + params.mlAds + "%)", amt: adsAmt, color: "danger" },
+              { label: "Tu margen (" + params.margenObjetivo + "%)", amt: margenAmt, color: "success" },
             ].map(item => (
-              <div key={item.label} style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>{item.label}</span><span style={{ fontWeight: 500, color: `var(--color-text-${item.color})` }}>${fmt(item.amt)}</span></div>
+              <div key={item.label} style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>{item.label}</span><span style={{ fontWeight: 500, color: "var(--color-text-" + item.color + ")" }}>${fmt(item.amt)}</span></div>
             ))}
             <hr style={S.divider} />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div style={{ flex: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontWeight: 500, fontSize: 13 }}>Precio mínimo</span>
+                  <span style={{ fontWeight: 500, fontSize: 13 }}>Precio m&iacute;nimo</span>
                   <button onClick={() => setPrecioMinConAds(!precioMinConAds)} style={{ background: precioMinConAds ? "var(--color-background-danger)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "2px 9px", fontSize: 11, color: precioMinConAds ? "var(--color-text-danger)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>
                     {precioMinConAds ? "incl. publicidad" : "+ publicidad?"}
                   </button>
                 </div>
-                <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: 0 }}>bodega + comisión ML + Full{precioMinConAds ? " + ads" : ""}{params.mlComisionFijaActiva ? " + cargo fijo" : ""}</p>
+                <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: 0 }}>bodega + comisi&oacute;n ML + Full{precioMinConAds ? " + ads" : ""}{params.mlComisionFijaActiva ? " + cargo fijo" : ""}</p>
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 14, fontWeight: 500, color: "var(--color-text-warning)" }}>${fmt(precioMinCLP)}</div>
-                <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>{isFinite(multiplicador) ? multiplicador.toFixed(1) : "—"}x sobre Alibaba</div>
+                <div style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>{isFinite(multiplicador) ? multiplicador.toFixed(1) : "\u2014"}x sobre Alibaba</div>
               </div>
             </div>
           </div>
@@ -392,17 +1082,17 @@ function TabPricing({ params }) {
               <>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8, marginBottom: 12 }}>
                   <div style={S.mc}><p style={S.label}>Margen por unidad</p><p style={{ ...S.val, fontSize: 18, color: margenManualUnit >= 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>${fmt(margenManualUnit)}</p><p style={S.sub}>{pct(margenManualPct)} del precio</p></div>
-                  <div style={S.mc}><p style={S.label}>Ingresos totales pedido</p><p style={{ ...S.val, fontSize: 18, color: "var(--color-text-info)" }}>${fmt(ingresosTotales)}</p><p style={S.sub}>{u}u × ${fmt(precioManual)}</p></div>
-                  <div style={S.mc}><p style={S.label}>Ganancia total pedido</p><p style={{ ...S.val, fontSize: 18, color: gananciaTotalPedido >= 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>${fmt(gananciaTotalPedido)}</p><p style={S.sub}>{u}u × ${fmt(margenManualUnit)}</p></div>
+                  <div style={S.mc}><p style={S.label}>Ingresos totales pedido</p><p style={{ ...S.val, fontSize: 18, color: "var(--color-text-info)" }}>${fmt(ingresosTotales)}</p><p style={S.sub}>{u}u &times; ${fmt(precioManual)}</p></div>
+                  <div style={S.mc}><p style={S.label}>Ganancia total pedido</p><p style={{ ...S.val, fontSize: 18, color: gananciaTotalPedido >= 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>${fmt(gananciaTotalPedido)}</p><p style={S.sub}>{u}u &times; ${fmt(margenManualUnit)}</p></div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <div style={{ ...S.alert(vsMin >= 0 ? "success" : "danger"), flex: 1, margin: 0 }}>
-                    <p style={{ fontSize: 11, fontWeight: 500, color: `var(--color-text-${vsMin >= 0 ? "success" : "danger"})`, margin: "0 0 2px" }}>vs precio mínimo</p>
-                    <p style={{ fontSize: 13, fontWeight: 500, color: `var(--color-text-${vsMin >= 0 ? "success" : "danger"})`, margin: 0 }}>{vsMin >= 0 ? "+" : ""}{fmt(vsMin)} CLP</p>
+                    <p style={{ fontSize: 11, fontWeight: 500, color: "var(--color-text-" + (vsMin >= 0 ? "success" : "danger") + ")", margin: "0 0 2px" }}>vs precio m&iacute;nimo</p>
+                    <p style={{ fontSize: 13, fontWeight: 500, color: "var(--color-text-" + (vsMin >= 0 ? "success" : "danger") + ")", margin: 0 }}>{vsMin >= 0 ? "+" : ""}{fmt(vsMin)} CLP</p>
                   </div>
                   <div style={{ ...S.alert(vsSugerido >= 0 ? "success" : "warning"), flex: 1, margin: 0 }}>
-                    <p style={{ fontSize: 11, fontWeight: 500, color: `var(--color-text-${vsSugerido >= 0 ? "success" : "warning"})`, margin: "0 0 2px" }}>vs precio sugerido</p>
-                    <p style={{ fontSize: 13, fontWeight: 500, color: `var(--color-text-${vsSugerido >= 0 ? "success" : "warning"})`, margin: 0 }}>{vsSugerido >= 0 ? "+" : ""}{fmt(vsSugerido)} CLP</p>
+                    <p style={{ fontSize: 11, fontWeight: 500, color: "var(--color-text-" + (vsSugerido >= 0 ? "success" : "warning") + ")", margin: "0 0 2px" }}>vs precio sugerido</p>
+                    <p style={{ fontSize: 13, fontWeight: 500, color: "var(--color-text-" + (vsSugerido >= 0 ? "success" : "warning") + ")", margin: 0 }}>{vsSugerido >= 0 ? "+" : ""}{fmt(vsSugerido)} CLP</p>
                   </div>
                 </div>
               </>
@@ -413,15 +1103,20 @@ function TabPricing({ params }) {
           {params.ivaActivo && params.ivaRecuperable && (
             <div style={S.alert("info")}>
               <p style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-info)", margin: "0 0 2px" }}>IVA recuperable: ${fmt(ivaBaseCLP)} por unidad no entra al costo</p>
-              <p style={{ fontSize: 12, color: "var(--color-text-info)", margin: 0 }}>Para recuperarlo, pide la DIN a DHL y declárala en SII → Servicios online → Registro de compras y ventas el mismo mes de la importación.</p>
+              <p style={{ fontSize: 12, color: "var(--color-text-info)", margin: 0 }}>Para recuperarlo, pide la DIN a DHL y decl&aacute;rala en SII &rarr; Servicios online &rarr; Registro de compras y ventas el mismo mes de la importaci&oacute;n.</p>
             </div>
           )}
         </div>
       </div>
+
+      <CotizacionesPanel open={panelOpen} onClose={() => setPanelOpen(false)} cotizaciones={drive.cotizaciones} loadingCots={drive.loadingCots} onSelect={loadCotizacion} activeCotId={activeCot ? activeCot._fileId : null} onRefresh={drive.refreshCotizaciones} />
     </div>
   );
 }
 
+/* ================================================================
+   EXISTING TABS — Dashboard, Comparador, Escalamiento, Publicidad
+   ================================================================ */
 function TabDashboard({ params }) {
   const [skus, setSkus] = useState([
     { nombre: "Almohadillas AirPods Pro", costoImport: 2640, ingProd: 213045, cargoVenta: -58709, envioNeto: 17840, neto: 172176, ventasAds: 15, ventasOrg: 8 },
@@ -439,12 +1134,11 @@ function TabDashboard({ params }) {
     const nAds = s.ventasAds, nOrg = s.ventasOrg, n = nAds + nOrg;
     const netoMLAds = nAds > 0 ? s.neto * nAds / n : 0;
     const netoMLOrg = nOrg > 0 ? s.neto * nOrg / n : 0;
-    const pubTotal = pubPorVentaAds * nAds;
     const netoRealAds = nAds > 0 ? netoMLAds / nAds - pubPorVentaAds - s.costoImport : null;
     const netoRealOrg = nOrg > 0 ? netoMLOrg / nOrg - s.costoImport : null;
     const margenAds = nAds > 0 && s.ingProd > 0 ? netoRealAds / (s.ingProd / n) * 100 : null;
     const margenOrg = nOrg > 0 && s.ingProd > 0 ? netoRealOrg / (s.ingProd / n) * 100 : null;
-    return { netoRealAds, netoRealOrg, margenAds, margenOrg, pubTotal, n, nAds, nOrg };
+    return { netoRealAds: netoRealAds, netoRealOrg: netoRealOrg, margenAds: margenAds, margenOrg: margenOrg, pubTotal: pubPorVentaAds * nAds, n: n, nAds: nAds, nOrg: nOrg };
   };
 
   const colorMargen = (v) => v === null ? "secondary" : v > 20 ? "success" : v > 0 ? "warning" : "danger";
@@ -454,7 +1148,7 @@ function TabDashboard({ params }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={S.mc}>
-            <p style={S.label}>Publicidad total período</p>
+            <p style={S.label}>Publicidad total per&iacute;odo</p>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>$</span>
               <input type="number" value={pubGlobal} onChange={e => setPubGlobal(parseFloat(e.target.value) || 0)} style={{ ...S.input, width: 120, fontSize: 16, fontWeight: 500 }} />
@@ -470,31 +1164,31 @@ function TabDashboard({ params }) {
         const isEdit = editIdx === i;
         const borderColor = c.netoRealAds < 0 || c.netoRealOrg < 0 ? "var(--color-border-danger)" : c.netoRealOrg > 3000 ? "var(--color-border-success)" : "var(--color-border-warning)";
         return (
-          <div key={i} style={{ ...S.card, borderLeft: `3px solid ${borderColor}` }}>
+          <div key={i} style={{ ...S.card, borderLeft: "3px solid " + borderColor }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isEdit ? 12 : 6 }}>
               <span style={{ fontWeight: 500, fontSize: 14 }}>{s.nombre}</span>
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => setEditIdx(isEdit ? null : i)} style={{ fontSize: 11, padding: "3px 10px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", cursor: "pointer", color: "var(--color-text-secondary)", fontFamily: "inherit" }}>{isEdit ? "cerrar" : "editar"}</button>
-                <button onClick={() => setSkus(skus.filter((_, j) => j !== i))} style={{ fontSize: 11, padding: "3px 10px", background: "var(--color-background-danger)", border: "none", borderRadius: "var(--border-radius-md)", cursor: "pointer", color: "var(--color-text-danger)", fontFamily: "inherit" }}>×</button>
+                <button onClick={() => setSkus(skus.filter((_, j) => j !== i))} style={{ fontSize: 11, padding: "3px 10px", background: "var(--color-background-danger)", border: "none", borderRadius: "var(--border-radius-md)", cursor: "pointer", color: "var(--color-text-danger)", fontFamily: "inherit" }}>&times;</button>
               </div>
             </div>
             {isEdit && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 8, marginBottom: 12, padding: 12, background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)" }}>
-                {[["Nombre","nombre","text"],["Costo importación/u","costoImport","number","CLP"],["Ingresos producto","ingProd","number","CLP"],["Cargo venta ML","cargoVenta","number","CLP"],["Envío neto","envioNeto","number","CLP"],["Total neto ML","neto","number","CLP"],["Ventas con ads","ventasAds","number","u"],["Ventas orgánicas","ventasOrg","number","u"]].map(([lbl,key,type,unit]) => (
+                {[["Nombre","nombre","text"],["Costo importaci\u00f3n/u","costoImport","number","CLP"],["Ingresos producto","ingProd","number","CLP"],["Cargo venta ML","cargoVenta","number","CLP"],["Env\u00edo neto","envioNeto","number","CLP"],["Total neto ML","neto","number","CLP"],["Ventas con ads","ventasAds","number","u"],["Ventas org\u00e1nicas","ventasOrg","number","u"]].map(([lbl,key,type,unit]) => (
                   <Field key={key} label={lbl} value={s[key]} onChange={v => setSkus(skus.map((x,j) => j===i?{...x,[key]:v}:x))} type={type} unit={unit} />
                 ))}
               </div>
             )}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 8 }}>
               {[
-                { label: "Ventas totales", val: `${c.n}u (${c.nAds} ads / ${c.nOrg} org)`, color: "primary" },
-                { label: "Margen con ads", val: c.margenAds !== null ? pct(c.margenAds) : "—", color: colorMargen(c.margenAds), extra: c.netoRealAds !== null ? `$${fmt(c.netoRealAds)}/u` : "" },
-                { label: "Margen orgánico", val: c.margenOrg !== null ? pct(c.margenOrg) : "—", color: colorMargen(c.margenOrg), extra: c.netoRealOrg !== null ? `$${fmt(c.netoRealOrg)}/u` : "" },
-                { label: "Costo publicidad", val: `$${fmt(c.pubTotal)}`, color: c.pubTotal > 0 ? "danger" : "secondary" },
+                { label: "Ventas totales", val: c.n + "u (" + c.nAds + " ads / " + c.nOrg + " org)", color: "primary" },
+                { label: "Margen con ads", val: c.margenAds !== null ? pct(c.margenAds) : "\u2014", color: colorMargen(c.margenAds), extra: c.netoRealAds !== null ? "$" + fmt(c.netoRealAds) + "/u" : "" },
+                { label: "Margen org\u00e1nico", val: c.margenOrg !== null ? pct(c.margenOrg) : "\u2014", color: colorMargen(c.margenOrg), extra: c.netoRealOrg !== null ? "$" + fmt(c.netoRealOrg) + "/u" : "" },
+                { label: "Costo publicidad", val: "$" + fmt(c.pubTotal), color: c.pubTotal > 0 ? "danger" : "secondary" },
               ].map(item => (
                 <div key={item.label} style={S.mc}>
                   <p style={S.label}>{item.label}</p>
-                  <p style={{ fontSize: 16, fontWeight: 500, margin: 0, color: `var(--color-text-${item.color})` }}>{item.val}</p>
+                  <p style={{ fontSize: 16, fontWeight: 500, margin: 0, color: "var(--color-text-" + item.color + ")" }}>{item.val}</p>
                   {item.extra && <p style={S.sub}>{item.extra}</p>}
                 </div>
               ))}
@@ -512,7 +1206,6 @@ function TabComparador({ params }) {
 
   const ali_cif = prod.ali_precio * params.usdClp + (prod.ali_envio_incluido ? 0 : prod.ali_envio_costo * params.usdClp);
   const ali_arancel = params.arancelActivo ? ali_cif * (params.arancel / 100) : 0;
-  // IVA Aliexpress: el toggle manda completamente. ivaRecuperable se ignora.
   const ali_iva_costo = (!prod.ali_iva_incluido && params.ivaActivo) ? (ali_cif + ali_arancel) * (params.iva / 100) : 0;
   const ali_total = ali_cif + ali_arancel + ali_iva_costo;
 
@@ -530,36 +1223,22 @@ function TabComparador({ params }) {
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-
-        {/* ALIEXPRESS */}
         <div style={S.card}>
           <p style={{ ...S.sectionLabel, color: "#f59e0b" }}>aliexpress</p>
           <Field label="Precio unitario" value={prod.ali_precio} onChange={v => set("ali_precio", v)} unit="USD" />
-          <Toggle label="Envío incluido en precio" value={prod.ali_envio_incluido} onChange={v => set("ali_envio_incluido", v)} />
-          {!prod.ali_envio_incluido && <Field label="Costo envío" value={prod.ali_envio_costo} onChange={v => set("ali_envio_costo", v)} unit="USD" />}
+          <Toggle label="Env\u00edo incluido en precio" value={prod.ali_envio_incluido} onChange={v => set("ali_envio_incluido", v)} />
+          {!prod.ali_envio_incluido && <Field label="Costo env\u00edo" value={prod.ali_envio_costo} onChange={v => set("ali_envio_costo", v)} unit="USD" />}
           <Toggle label="IVA incluido en precio" value={prod.ali_iva_incluido} onChange={v => set("ali_iva_incluido", v)} />
           <hr style={S.divider} />
           <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>CIF</span><span>${fmt(ali_cif)}</span></div>
-          <div style={S.row}>
-            <span style={{ color: "var(--color-text-secondary)" }}>Arancel {params.arancelActivo ? `(${params.arancel}%)` : "(inactivo)"}</span>
-            <span style={{ color: params.arancelActivo ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}>{params.arancelActivo ? `$${fmt(ali_arancel)}` : "—"}</span>
-          </div>
-          <div style={S.row}>
-            <span style={{ color: "var(--color-text-secondary)" }}>
-              IVA ({params.iva}%) {prod.ali_iva_incluido ? "— incluido en precio" : "— costo adicional"}
-            </span>
-            <span style={{ color: prod.ali_iva_incluido ? "var(--color-text-tertiary)" : "var(--color-text-danger)" }}>
-              {prod.ali_iva_incluido ? "—" : `${fmt(ali_iva_costo)}`}
-            </span>
-          </div>
+          <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>Arancel {params.arancelActivo ? "(" + params.arancel + "%)" : "(inactivo)"}</span><span style={{ color: params.arancelActivo ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}>{params.arancelActivo ? "$" + fmt(ali_arancel) : "\u2014"}</span></div>
+          <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>IVA ({params.iva}%) {prod.ali_iva_incluido ? "\u2014 incluido en precio" : "\u2014 costo adicional"}</span><span style={{ color: prod.ali_iva_incluido ? "var(--color-text-tertiary)" : "var(--color-text-danger)" }}>{prod.ali_iva_incluido ? "\u2014" : fmt(ali_iva_costo)}</span></div>
           <div style={S.row}><span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>Honorarios DHL</span><span style={{ color: "var(--color-text-tertiary)", fontSize: 11 }}>N/A</span></div>
           <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontWeight: 500 }}>
             <span>Total bodega</span>
             <span style={{ fontSize: 18, color: diferencia > 0 ? "var(--color-text-danger)" : "var(--color-text-success)" }}>${fmt(ali_total)}</span>
           </div>
         </div>
-
-        {/* ALIBABA */}
         <div style={S.card}>
           <p style={{ ...S.sectionLabel, color: "#378ADD" }}>alibaba</p>
           <Field label="Precio unitario" value={prod.alib_precio} onChange={v => set("alib_precio", v)} unit="USD" />
@@ -567,14 +1246,8 @@ function TabComparador({ params }) {
           <Field label="Flete total DHL" value={prod.alib_flete} onChange={v => set("alib_flete", v)} unit="USD" />
           <hr style={S.divider} />
           <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>CIF (producto + flete/u)</span><span>${fmt(alib_cif)}</span></div>
-          <div style={S.row}>
-            <span style={{ color: "var(--color-text-secondary)" }}>Arancel {params.arancelActivo ? `(${params.arancel}%)` : "(inactivo)"}</span>
-            <span style={{ color: params.arancelActivo ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}>{params.arancelActivo ? `$${fmt(alib_arancel)}` : "—"}</span>
-          </div>
-          <div style={S.row}>
-            <span style={{ color: "var(--color-text-secondary)" }}>IVA {!params.ivaActivo ? "(inactivo)" : params.ivaRecuperable ? "(recuperable)" : "(costo)"}</span>
-            <span style={{ color: !params.ivaActivo ? "var(--color-text-tertiary)" : params.ivaRecuperable ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{!params.ivaActivo ? "—" : params.ivaRecuperable ? "no es costo" : `$${fmt(alib_iva_costo)}`}</span>
-          </div>
+          <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>Arancel {params.arancelActivo ? "(" + params.arancel + "%)" : "(inactivo)"}</span><span style={{ color: params.arancelActivo ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}>{params.arancelActivo ? "$" + fmt(alib_arancel) : "\u2014"}</span></div>
+          <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>IVA {!params.ivaActivo ? "(inactivo)" : params.ivaRecuperable ? "(recuperable)" : "(costo)"}</span><span style={{ color: !params.ivaActivo ? "var(--color-text-tertiary)" : params.ivaRecuperable ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{!params.ivaActivo ? "\u2014" : params.ivaRecuperable ? "no es costo" : "$" + fmt(alib_iva_costo)}</span></div>
           <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>Honorarios DHL/u</span><span>${fmt(alib_dhl)}</span></div>
           <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontWeight: 500 }}>
             <span>Total bodega</span>
@@ -582,13 +1255,12 @@ function TabComparador({ params }) {
           </div>
         </div>
       </div>
-
       <div style={{ ...S.card, textAlign: "center" }}>
         <p style={S.sectionLabel}>veredicto</p>
-        <p style={{ fontSize: 28, fontWeight: 500, margin: "0 0 6px", color: ganador === "Alibaba" ? "#378ADD" : ganador === "Aliexpress" ? "#f59e0b" : "var(--color-text-primary)" }}>{ganador} es más barato</p>
+        <p style={{ fontSize: 28, fontWeight: 500, margin: "0 0 6px", color: ganador === "Alibaba" ? "#378ADD" : ganador === "Aliexpress" ? "#f59e0b" : "var(--color-text-primary)" }}>{ganador} es m&aacute;s barato</p>
         <p style={{ fontSize: 14, color: "var(--color-text-secondary)", margin: "0 0 12px" }}>por ${fmt(Math.abs(diferencia))} por unidad ({pct(pctDif)})</p>
-        {!params.ivaRecuperable && <div style={S.alert("warning")}><p style={{ fontSize: 12, color: "var(--color-text-warning)", margin: 0 }}>Con IVA recuperable activado, Alibaba mejora relativamente porque genera DIN y crédito fiscal. Aliexpress no.</p></div>}
-        {prod.alib_unidades < 20 && <div style={S.alert("info")}><p style={{ fontSize: 12, color: "var(--color-text-info)", margin: 0 }}>Con pedidos pequeños ({prod.alib_unidades}u), el DHL diluye poco. Aumenta las unidades para ver cómo mejora Alibaba con volumen.</p></div>}
+        {!params.ivaRecuperable && <div style={S.alert("warning")}><p style={{ fontSize: 12, color: "var(--color-text-warning)", margin: 0 }}>Con IVA recuperable activado, Alibaba mejora relativamente porque genera DIN y cr&eacute;dito fiscal. Aliexpress no.</p></div>}
+        {prod.alib_unidades < 20 && <div style={S.alert("info")}><p style={{ fontSize: 12, color: "var(--color-text-info)", margin: 0 }}>Con pedidos peque&ntilde;os ({prod.alib_unidades}u), el DHL diluye poco. Aumenta las unidades para ver c&oacute;mo mejora Alibaba con volumen.</p></div>}
       </div>
     </div>
   );
@@ -622,13 +1294,13 @@ function TabEscalamiento({ params }) {
           <div style={S.card}>
             <p style={S.sectionLabel}>aliexpress (testeo)</p>
             <Field label="Precio unitario" value={cfg.aliPrecio} onChange={v => set("aliPrecio", v)} unit="USD" />
-            <Toggle label="Envío incluido" value={cfg.aliEnvioIncluido} onChange={v => set("aliEnvioIncluido", v)} />
-            {!cfg.aliEnvioIncluido && <Field label="Costo envío" value={cfg.aliEnvioCosto} onChange={v => set("aliEnvioCosto", v)} unit="USD" />}
+            <Toggle label="Env\u00edo incluido" value={cfg.aliEnvioIncluido} onChange={v => set("aliEnvioIncluido", v)} />
+            {!cfg.aliEnvioIncluido && <Field label="Costo env\u00edo" value={cfg.aliEnvioCosto} onChange={v => set("aliEnvioCosto", v)} unit="USD" />}
           </div>
           <div style={S.card}>
             <p style={S.sectionLabel}>alibaba (escala)</p>
             <Field label="Precio unitario" value={cfg.alibPrecio} onChange={v => set("alibPrecio", v)} unit="USD" />
-            <Field label="MOQ (mínimo pedido)" value={cfg.alibMOQ} onChange={v => set("alibMOQ", v)} unit="unid." />
+            <Field label="MOQ (m&iacute;nimo pedido)" value={cfg.alibMOQ} onChange={v => set("alibMOQ", v)} unit="unid." />
             <Field label="Flete total DHL" value={cfg.alibFlete} onChange={v => set("alibFlete", v)} unit="USD" />
           </div>
           <div style={S.card}>
@@ -644,19 +1316,13 @@ function TabEscalamiento({ params }) {
               { label: "Margen neto con Aliexpress", val: margen_ali, color: margen_ali > 0 ? "success" : "danger" },
               { label: "Margen neto con Alibaba", val: margen_alib, color: margen_alib > 0 ? "success" : "danger" },
             ].map(item => (
-              <div key={item.label} style={S.mc}><p style={S.label}>{item.label}</p><p style={{ ...S.val, fontSize: 18, color: `var(--color-text-${item.color})` }}>${fmt(item.val)}</p><p style={S.sub}>por unidad</p></div>
+              <div key={item.label} style={S.mc}><p style={S.label}>{item.label}</p><p style={{ ...S.val, fontSize: 18, color: "var(--color-text-" + item.color + ")" }}>${fmt(item.val)}</p><p style={S.sub}>por unidad</p></div>
             ))}
           </div>
           <div style={S.card}>
             <p style={S.sectionLabel}>ahorro mensual al escalar a alibaba</p>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-                  {["Unidades/mes","Ahorro mensual","Ahorro anual","¿Conviene?"].map((h,i) => (
-                    <th key={h} style={{ textAlign: i===0?"left":"right", padding: "6px 0", color: "var(--color-text-tertiary)", fontWeight: 400 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
+              <thead><tr style={{ borderBottom: "0.5px solid var(--color-border-tertiary)" }}>{["Unidades/mes","Ahorro mensual","Ahorro anual","\u00bfConviene?"].map((h,i) => (<th key={h} style={{ textAlign: i===0?"left":"right", padding: "6px 0", color: "var(--color-text-tertiary)", fontWeight: 400 }}>{h}</th>))}</tr></thead>
               <tbody>
                 {niveles.map(n => {
                   const ahorro = (costo_ali - costo_alib) * n;
@@ -666,15 +1332,15 @@ function TabEscalamiento({ params }) {
                       <td style={{ padding: "7px 0", fontWeight: cumpleMOQ ? 500 : 400 }}>{n}u</td>
                       <td style={{ textAlign: "right", padding: "7px 0", color: ahorro > 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>${fmt(ahorro)}</td>
                       <td style={{ textAlign: "right", padding: "7px 0", color: ahorro > 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>${fmt(ahorro * 12)}</td>
-                      <td style={{ textAlign: "right", padding: "7px 0" }}>{!cumpleMOQ ? <span style={S.pill("warning")}>bajo MOQ</span> : alibConviene ? <span style={S.pill("success")}>sí</span> : <span style={S.pill("danger")}>no</span>}</td>
+                      <td style={{ textAlign: "right", padding: "7px 0" }}>{!cumpleMOQ ? <span style={S.pill("warning")}>bajo MOQ</span> : alibConviene ? <span style={S.pill("success")}>s&iacute;</span> : <span style={S.pill("danger")}>no</span>}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
-            <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: "10px 0 0" }}>MOQ mínimo de Alibaba: {cfg.alibMOQ} unidades.</p>
+            <p style={{ fontSize: 11, color: "var(--color-text-tertiary)", margin: "10px 0 0" }}>MOQ m&iacute;nimo de Alibaba: {cfg.alibMOQ} unidades.</p>
           </div>
-          {!alibConviene && <div style={S.alert("warning")}><p style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-warning)", margin: "0 0 2px" }}>Atención: con estos precios, Aliexpress es más barato por unidad</p><p style={{ fontSize: 12, color: "var(--color-text-warning)", margin: 0 }}>Revisa el precio de Alibaba o negocia mejor el flete.</p></div>}
+          {!alibConviene && <div style={S.alert("warning")}><p style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-warning)", margin: "0 0 2px" }}>Atenci&oacute;n: con estos precios, Aliexpress es m&aacute;s barato por unidad</p><p style={{ fontSize: 12, color: "var(--color-text-warning)", margin: 0 }}>Revisa el precio de Alibaba o negocia mejor el flete.</p></div>}
         </div>
       </div>
     </div>
@@ -697,9 +1363,9 @@ function TabPublicidad({ params }) {
   const ingresosPorVentaAds = cfg.ventasAds > 0 ? cfg.ventasAds * cfg.precioVenta / 30 : 0;
   const pptoOptimo = ingresosPorVentaAds * (cfg.acosObjetivo / 100);
   const escenarios = [
-    { roas: 2, label: "ROAS 2 — malo" }, { roas: 3, label: "ROAS 3 — aceptable" },
-    { roas: 4, label: "ROAS 4 — tu caso" }, { roas: 6, label: "ROAS 6 — bueno" },
-    { roas: 8, label: "ROAS 8 — excelente" },
+    { roas: 2, label: "ROAS 2 \u2014 malo" }, { roas: 3, label: "ROAS 3 \u2014 aceptable" },
+    { roas: 4, label: "ROAS 4 \u2014 tu caso" }, { roas: 6, label: "ROAS 6 \u2014 bueno" },
+    { roas: 8, label: "ROAS 8 \u2014 excelente" },
   ];
 
   return (
@@ -709,10 +1375,10 @@ function TabPublicidad({ params }) {
           <div style={S.card}>
             <p style={S.sectionLabel}>tu producto</p>
             <Field label="Precio de venta" value={cfg.precioVenta} onChange={v => set("precioVenta", v)} unit="CLP" />
-            <Field label="Costo importación/u" value={cfg.costoProducto} onChange={v => set("costoProducto", v)} unit="CLP" />
+            <Field label="Costo importaci&oacute;n/u" value={cfg.costoProducto} onChange={v => set("costoProducto", v)} unit="CLP" />
           </div>
           <div style={S.card}>
-            <p style={S.sectionLabel}>tu campaña actual</p>
+            <p style={S.sectionLabel}>tu campa&ntilde;a actual</p>
             <Field label="ROAS actual" value={cfg.roasActual} onChange={v => set("roasActual", v)} hint="Dato de ML Ads" />
             <Field label="Gasto mensual total" value={cfg.pubMensual} onChange={v => set("pubMensual", v)} unit="CLP" />
             <Field label="Ventas totales/mes" value={cfg.ventasMes} onChange={v => set("ventasMes", v)} unit="u" />
@@ -725,32 +1391,26 @@ function TabPublicidad({ params }) {
         </div>
         <div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, marginBottom: 16 }}>
-            <div style={S.mc}><p style={S.label}>Margen sin publicidad</p><p style={{ ...S.val, color: "var(--color-text-success)" }}>${fmt(margenSinAds)}</p><p style={S.sub}>por unidad · {pct(margenSinAds / cfg.precioVenta * 100)}</p></div>
-            <div style={S.mc}><p style={S.label}>Margen con publicidad</p><p style={{ ...S.val, color: margenConAds > 0 ? "var(--color-text-warning)" : "var(--color-text-danger)" }}>${fmt(margenConAds)}</p><p style={S.sub}>por unidad · {pct(margenConAds / cfg.precioVenta * 100)}</p></div>
-            <div style={S.mc}><p style={S.label}>ACOS máximo rentable</p><p style={{ ...S.val, color: acosActual <= acosMaxRentable ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{pct(acosMaxRentable)}</p><p style={S.sub}>tu ACOS actual: {pct(acosActual)}</p></div>
+            <div style={S.mc}><p style={S.label}>Margen sin publicidad</p><p style={{ ...S.val, color: "var(--color-text-success)" }}>${fmt(margenSinAds)}</p><p style={S.sub}>por unidad &middot; {pct(margenSinAds / cfg.precioVenta * 100)}</p></div>
+            <div style={S.mc}><p style={S.label}>Margen con publicidad</p><p style={{ ...S.val, color: margenConAds > 0 ? "var(--color-text-warning)" : "var(--color-text-danger)" }}>${fmt(margenConAds)}</p><p style={S.sub}>por unidad &middot; {pct(margenConAds / cfg.precioVenta * 100)}</p></div>
+            <div style={S.mc}><p style={S.label}>ACOS m&aacute;ximo rentable</p><p style={{ ...S.val, color: acosActual <= acosMaxRentable ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{pct(acosMaxRentable)}</p><p style={S.sub}>tu ACOS actual: {pct(acosActual)}</p></div>
           </div>
           <div style={S.card}>
-            <p style={S.sectionLabel}>diagnóstico de tu campaña</p>
+            <p style={S.sectionLabel}>diagn&oacute;stico de tu campa&ntilde;a</p>
             {[
               { label: "ROAS actual", right: <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 500 }}>{cfg.roasActual}x</span><span style={S.pill("success")}>mejor que 90% competidores</span></div> },
               { label: "ACOS actual (1/ROAS)", right: <span style={{ fontWeight: 500, color: acosActual <= acosMaxRentable ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{pct(acosActual)}</span> },
               { label: "Costo publicidad por venta ads", right: <span style={{ fontWeight: 500 }}>${fmt(pubPorVenta)}</span> },
-              { label: `Presupuesto diario óptimo (ACOS ${cfg.acosObjetivo}%)`, right: <span style={{ fontWeight: 500, color: "var(--color-text-info)" }}>${fmt(pptoOptimo)}/día</span> },
+              { label: "Presupuesto diario \u00f3ptimo (ACOS " + cfg.acosObjetivo + "%)", right: <span style={{ fontWeight: 500, color: "var(--color-text-info)" }}>${fmt(pptoOptimo)}/d\u00eda</span> },
               { label: "Ventas incrementales necesarias para ROI positivo", right: <span style={{ fontWeight: 500, color: "var(--color-text-warning)" }}>{Math.ceil(ventasIncrNecesarias)}u/mes</span> },
             ].map((item, i) => (
               <div key={i} style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>{item.label}</span>{item.right}</div>
             ))}
           </div>
           <div style={S.card}>
-            <p style={S.sectionLabel}>simulador de escenarios ROAS → margen real</p>
+            <p style={S.sectionLabel}>simulador de escenarios ROAS &rarr; margen real</p>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
-                  {["Escenario","ACOS","Pub/venta","Margen real/u","Rentable"].map((h,i) => (
-                    <th key={h} style={{ textAlign: i===0?"left":"right", padding: "6px 0", fontWeight: 400, color: "var(--color-text-tertiary)" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
+              <thead><tr style={{ borderBottom: "0.5px solid var(--color-border-tertiary)" }}>{["Escenario","ACOS","Pub/venta","Margen real/u","Rentable"].map((h,i) => (<th key={h} style={{ textAlign: i===0?"left":"right", padding: "6px 0", fontWeight: 400, color: "var(--color-text-tertiary)" }}>{h}</th>))}</tr></thead>
               <tbody>
                 {escenarios.map(e => {
                   const acos = 1/e.roas*100, pubU = cfg.precioVenta*(acos/100), margen = margenDisponible - pubU;
@@ -761,7 +1421,7 @@ function TabPublicidad({ params }) {
                       <td style={{ textAlign: "right" }}>{pct(acos)}</td>
                       <td style={{ textAlign: "right" }}>${fmt(pubU)}</td>
                       <td style={{ textAlign: "right", fontWeight: 500, color: margen > 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>${fmt(margen)}</td>
-                      <td style={{ textAlign: "right" }}>{margen > 0 ? <span style={S.pill("success")}>sí</span> : <span style={S.pill("danger")}>no</span>}</td>
+                      <td style={{ textAlign: "right" }}>{margen > 0 ? <span style={S.pill("success")}>s&iacute;</span> : <span style={S.pill("danger")}>no</span>}</td>
                     </tr>
                   );
                 })}
@@ -769,8 +1429,8 @@ function TabPublicidad({ params }) {
             </table>
           </div>
           {acosActual > acosMaxRentable
-            ? <div style={S.alert("danger")}><p style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-danger)", margin: "0 0 2px" }}>Tu ACOS actual ({pct(acosActual)}) supera el máximo rentable ({pct(acosMaxRentable)})</p><p style={{ fontSize: 12, color: "var(--color-text-danger)", margin: 0 }}>Sube el precio o baja el presupuesto diario a ${fmt(pptoOptimo)}.</p></div>
-            : <div style={S.alert("success")}><p style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-success)", margin: "0 0 2px" }}>Tu ACOS actual está dentro del rango rentable</p><p style={{ fontSize: 12, color: "var(--color-text-success)", margin: 0 }}>Con ROAS {cfg.roasActual} y precio ${fmt(cfg.precioVenta)}, la publicidad genera margen positivo de ${fmt(margenConAds)}/u.</p></div>
+            ? <div style={S.alert("danger")}><p style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-danger)", margin: "0 0 2px" }}>Tu ACOS actual ({pct(acosActual)}) supera el m&aacute;ximo rentable ({pct(acosMaxRentable)})</p><p style={{ fontSize: 12, color: "var(--color-text-danger)", margin: 0 }}>Sube el precio o baja el presupuesto diario a ${fmt(pptoOptimo)}.</p></div>
+            : <div style={S.alert("success")}><p style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-success)", margin: "0 0 2px" }}>Tu ACOS actual est&aacute; dentro del rango rentable</p><p style={{ fontSize: 12, color: "var(--color-text-success)", margin: 0 }}>Con ROAS {cfg.roasActual} y precio ${fmt(cfg.precioVenta)}, la publicidad genera margen positivo de ${fmt(margenConAds)}/u.</p></div>
           }
         </div>
       </div>
@@ -778,21 +1438,52 @@ function TabPublicidad({ params }) {
   );
 }
 
+/* ================================================================
+   APP — Main component with Google Drive integration
+   ================================================================ */
 function App() {
   const [tab, setTab] = useState("pricing");
   const [params, setParams] = useState(DEFAULT_PARAMS);
   const [showParams, setShowParams] = useState(false);
+  const drive = useGoogleDrive();
+
+  useEffect(function() {
+    if (drive.driveStatus === 'connected') drive.refreshCotizaciones();
+  }, [drive.driveStatus]);
+
+  const dsMap = {
+    loading: { text: 'Conectando...', css: 'loading' },
+    ready: { text: 'Conectar Google Drive', css: 'disconnected' },
+    connected: { text: 'Drive conectado', css: 'connected' },
+    unavailable: { text: 'Drive no disponible', css: 'disconnected' },
+    error: { text: 'Error de conexi\u00f3n', css: 'disconnected' },
+  };
+  const ds = dsMap[drive.driveStatus] || dsMap.ready;
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--color-background-tertiary)", fontFamily: "var(--font-sans)" }}>
       <div style={{ background: "var(--color-background-primary)", borderBottom: "0.5px solid var(--color-border-tertiary)", padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 10 }}>
         <div>
           <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 2 }}>FIXIT SPA</div>
-          <div style={{ fontSize: 18, fontWeight: 500, color: "var(--color-text-primary)" }}>Centro de control · Importación & ML</div>
+          <div style={{ fontSize: 18, fontWeight: 500, color: "var(--color-text-primary)" }}>Centro de control &middot; Importaci&oacute;n & ML</div>
         </div>
-        <button onClick={() => setShowParams(!showParams)} style={{ fontSize: 12, padding: "7px 14px", background: showParams ? "var(--color-background-info)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", cursor: "pointer", color: showParams ? "var(--color-text-info)" : "var(--color-text-secondary)", fontFamily: "inherit" }}>
-          {showParams ? "Ocultar parámetros" : "Parámetros globales"}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {drive.driveStatus === 'connected' ? (
+            <div className={'drive-indicator ' + ds.css} title="Conectado a Google Drive">
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--color-text-success)', display: 'inline-block' }} />
+              <span>{ds.text}</span>
+              <button onClick={drive.logout} style={{ fontSize: 10, padding: '1px 6px', background: 'transparent', border: '1px solid var(--color-border-success)', borderRadius: 100, color: 'var(--color-text-success)', cursor: 'pointer', fontFamily: 'inherit', marginLeft: 4 }}>salir</button>
+            </div>
+          ) : (
+            <div className={'drive-indicator ' + ds.css} onClick={drive.driveStatus === 'ready' ? drive.login : undefined} title={drive.driveStatus === 'ready' ? 'Haz clic para conectar' : ''}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: drive.driveStatus === 'loading' ? 'var(--color-text-warning)' : 'var(--color-text-tertiary)', display: 'inline-block' }} />
+              <span>{ds.text}</span>
+            </div>
+          )}
+          <button onClick={() => setShowParams(!showParams)} style={{ fontSize: 12, padding: "7px 14px", background: showParams ? "var(--color-background-info)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", cursor: "pointer", color: showParams ? "var(--color-text-info)" : "var(--color-text-secondary)", fontFamily: "inherit" }}>
+            {showParams ? "Ocultar par\u00e1metros" : "Par\u00e1metros globales"}
+          </button>
+        </div>
       </div>
 
       {showParams && (
@@ -810,12 +1501,14 @@ function App() {
       </div>
 
       <div style={{ padding: "20px 24px", maxWidth: 1100, margin: "0 auto" }}>
-        {tab === "pricing" && <TabPricing params={params} />}
+        {tab === "pricing" && <TabPricing params={params} drive={drive} />}
         {tab === "dashboard" && <TabDashboard params={params} />}
         {tab === "comparador" && <TabComparador params={params} />}
         {tab === "escalamiento" && <TabEscalamiento params={params} />}
         {tab === "publicidad" && <TabPublicidad params={params} />}
       </div>
+
+      <NotificationToast notification={drive.notification} />
     </div>
   );
 }
