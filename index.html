@@ -111,16 +111,39 @@ function UsdClpField({ params, setParams }) {
 
   const fetchRate = useCallback(async () => {
     setStatus("loading");
-    try {
-      const res = await fetch("https://corsproxy.io/?url=https://mindicador.cl/api/dolar");
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      const rate = Math.round(data.serie[0].valor);
-      const date = data.serie[0].fecha.split("T")[0];
-      setAutoRate(rate); setAutoDate(date);
-      if (!manualMode) setParams(p => ({ ...p, usdClp: rate }));
-      setStatus("ok");
-    } catch { setStatus("error"); }
+    const apis = [
+      async () => {
+        const r = await fetch("https://corsproxy.io/?url=https://mindicador.cl/api/dolar");
+        if (!r.ok) throw new Error();
+        const d = await r.json();
+        return { rate: Math.round(d.serie[0].valor), date: d.serie[0].fecha.split("T")[0], src: "Banco Central" };
+      },
+      async () => {
+        const r = await fetch("https://api.frankfurter.dev/v1/latest?base=USD&symbols=CLP");
+        if (!r.ok) throw new Error();
+        const d = await r.json();
+        if (!d.rates?.CLP) throw new Error();
+        return { rate: Math.round(d.rates.CLP), date: d.date, src: "Frankfurter" };
+      },
+      async () => {
+        const r = await fetch("https://open.exchangerate-api.com/v6/latest/USD");
+        if (!r.ok) throw new Error();
+        const d = await r.json();
+        return { rate: Math.round(d.rates.CLP), date: new Date(d.time_last_update_utc).toISOString().split("T")[0], src: "ExchangeRate-API" };
+      },
+    ];
+    let success = false;
+    for (const api of apis) {
+      try {
+        const { rate, date, src } = await api();
+        setAutoRate(rate); setAutoDate(`${date} · ${src}`);
+        if (!manualMode) setParams(p => ({ ...p, usdClp: rate }));
+        setStatus("ok");
+        success = true;
+        break;
+      } catch { continue; }
+    }
+    if (!success) setStatus("error");
   }, [manualMode, setParams]);
 
   useEffect(() => { fetchRate(); }, []);
@@ -530,13 +553,13 @@ function TabDashboard({ params }) {
 }
 
 function TabComparador({ params }) {
-  const [prod, setProd] = useState({ nombre: "Producto ejemplo", ali_precio: 4.5, ali_envio_incluido: true, ali_envio_costo: 0, alib_precio: 3.2, alib_unidades: 50, alib_flete: 80 });
+  const [prod, setProd] = useState({ nombre: "Producto ejemplo", ali_precio: 4.5, ali_envio_incluido: true, ali_envio_costo: 0, ali_iva_incluido: false, alib_precio: 3.2, alib_unidades: 50, alib_flete: 80 });
   const set = (k, v) => setProd(p => ({ ...p, [k]: v }));
 
   const ali_cif = prod.ali_precio * params.usdClp + (prod.ali_envio_incluido ? 0 : prod.ali_envio_costo * params.usdClp);
   const ali_arancel = params.arancelActivo ? ali_cif * (params.arancel / 100) : 0;
   const ali_iva_base = params.ivaActivo ? (ali_cif + ali_arancel) * (params.iva / 100) : 0;
-  const ali_iva_costo = (params.ivaActivo && !params.ivaRecuperable) ? ali_iva_base : 0;
+  const ali_iva_costo = (params.ivaActivo && !params.ivaRecuperable && !prod.ali_iva_incluido) ? ali_iva_base : 0;
   const ali_total = ali_cif + ali_arancel + ali_iva_costo;
 
   const alib_cif = prod.alib_precio * params.usdClp + (prod.alib_flete / (prod.alib_unidades || 1)) * params.usdClp;
@@ -558,6 +581,7 @@ function TabComparador({ params }) {
           <Field label="Precio unitario" value={prod.ali_precio} onChange={v => set("ali_precio", v)} unit="USD" />
           <Toggle label="Envío incluido en precio" value={prod.ali_envio_incluido} onChange={v => set("ali_envio_incluido", v)} />
           {!prod.ali_envio_incluido && <Field label="Costo envío" value={prod.ali_envio_costo} onChange={v => set("ali_envio_costo", v)} unit="USD" />}
+          <Toggle label="IVA incluido en precio" value={prod.ali_iva_incluido} onChange={v => set("ali_iva_incluido", v)} />
           <hr style={S.divider} />
           <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>CIF</span><span>${fmt(ali_cif)}</span></div>
           <div style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>Arancel</span><span style={{ color: params.arancelActivo ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}>{params.arancelActivo ? `$${fmt(ali_arancel)}` : "—"}</span></div>
