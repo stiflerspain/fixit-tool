@@ -112,7 +112,7 @@ function UsdClpField({ params, setParams }) {
   const fetchRate = useCallback(async () => {
     setStatus("loading");
     try {
-      const res = await fetch("https://mindicador.cl/api/dolar");
+      const res = await fetch("https://corsproxy.io/?url=https://mindicador.cl/api/dolar");
       if (!res.ok) throw new Error();
       const data = await res.json();
       const rate = Math.round(data.serie[0].valor);
