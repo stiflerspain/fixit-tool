@@ -112,11 +112,12 @@ function UsdClpField({ params, setParams }) {
   const fetchRate = useCallback(async () => {
     setStatus("loading");
     try {
-      const res = await fetch("https://api.frankfurter.dev/v1/latest?base=USD&symbols=CLP");
+      const res = await fetch("https://mindicador.cl/api/dolar");
       if (!res.ok) throw new Error();
       const data = await res.json();
-      const rate = Math.round(data.rates.CLP);
-      setAutoRate(rate); setAutoDate(data.date);
+      const rate = Math.round(data.serie[0].valor);
+      const date = data.serie[0].fecha.split("T")[0];
+      setAutoRate(rate); setAutoDate(date);
       if (!manualMode) setParams(p => ({ ...p, usdClp: rate }));
       setStatus("ok");
     } catch { setStatus("error"); }
