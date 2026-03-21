@@ -131,8 +131,8 @@ const { useState, useCallback, useEffect, useRef } = React;
 /* ================================================================
    GOOGLE DRIVE — Credenciales (reemplazar con las tuyas)
    ================================================================ */
-const GOOGLE_CLIENT_ID = 'TU_CLIENT_ID_AQUI.apps.googleusercontent.com';
-const GOOGLE_API_KEY = 'TU_API_KEY_AQUI';
+const GOOGLE_CLIENT_ID = '656434596202-bm95e2b1voq65ni9slkrdenjqjqplsdj.apps.googleusercontent.com';
+const GOOGLE_API_KEY = 'AIzaSyCyWD0-xjpNXX_hgJZ3dt1x_X2OS1BxhzY';
 const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file';
 const FIXIT_FOLDER_NAME = 'FIXIT-Data';
 const COT_FOLDER_NAME = 'cotizaciones';
@@ -483,7 +483,7 @@ const DEFAULT_PARAMS = {
   ivaRecuperable: true, dhlFee: 35,
   recargoTarjetaActivo: false, recargoTarjeta: 1.5,
   mlComision: 27.6, mlComisionFijaActiva: false, mlComisionFija: 0,
-  mlFull: 2.3, mlAds: 16, margenObjetivo: 35,
+  mlFull: 2.3, mlAds: 16, mlAdsMode: "pct", mlAdsFijo: 0, margenObjetivo: 35,
 };
 
 const TABS = [
@@ -650,7 +650,18 @@ function ParamsPanel({ params, setParams }) {
             )}
           </div>
           <Field label="Full ML" value={params.mlFull} onChange={v => set("mlFull", v)} unit="%" />
-          <Field label="% Publicidad" value={params.mlAds} onChange={v => set("mlAds", v)} unit="%" />
+          <div style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "10px 12px", marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>Publicidad</span>
+              <button onClick={() => set("mlAdsMode", params.mlAdsMode === "pct" ? "fixed" : "pct")} style={{ background: params.mlAdsMode === "fixed" ? "var(--color-background-warning)" : "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, padding: "2px 10px", fontSize: 11, color: params.mlAdsMode === "fixed" ? "var(--color-text-warning)" : "var(--color-text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>
+                {params.mlAdsMode === "fixed" ? "modo: CLP por unidad" : "modo: % sobre precio"}
+              </button>
+            </div>
+            {params.mlAdsMode === "pct"
+              ? <Field label="" value={params.mlAds} onChange={v => set("mlAds", v)} unit="% sobre precio venta" />
+              : <Field label="" value={params.mlAdsFijo} onChange={v => set("mlAdsFijo", v)} unit="CLP por unidad" />
+            }
+          </div>
           <Field label="Margen objetivo" value={params.margenObjetivo} onChange={v => set("margenObjetivo", v)} unit="%" />
         </div>
       </div>
@@ -839,20 +850,23 @@ function TabPricing({ params, drive }) {
   const costoBodegaCLP = cifCLP + recargoCLP + arancelCLP + ivaCostoCLP + dhlUnitCLP;
 
   const comisionFija = params.mlComisionFijaActiva ? params.mlComisionFija : 0;
-  const deductions = (params.mlComision + params.mlFull + params.mlAds + params.margenObjetivo) / 100;
-  const precioSugeridoCLP = (costoBodegaCLP + comisionFija) / (1 - deductions);
-  const pctMin = precioMinConAds ? (params.mlComision + params.mlFull + params.mlAds) / 100 : (params.mlComision + params.mlFull) / 100;
-  const precioMinCLP = (costoBodegaCLP + comisionFija) / (1 - pctMin);
+  const adsPct = params.mlAdsMode === "pct" ? params.mlAds : 0;
+  const adsFijo = params.mlAdsMode === "fixed" ? params.mlAdsFijo : 0;
+  const deductions = (params.mlComision + params.mlFull + adsPct + params.margenObjetivo) / 100;
+  const precioSugeridoCLP = (costoBodegaCLP + comisionFija + adsFijo) / (1 - deductions);
+  const pctMin = precioMinConAds ? (params.mlComision + params.mlFull + adsPct) / 100 : (params.mlComision + params.mlFull) / 100;
+  const fijoMin = precioMinConAds ? adsFijo : 0;
+  const precioMinCLP = (costoBodegaCLP + comisionFija + fijoMin) / (1 - pctMin);
   const multiplicador = precioMinCLP / (prod.precioAli * params.usdClp);
 
   const comisionPctAmt = precioSugeridoCLP * (params.mlComision / 100);
   const fullAmt = precioSugeridoCLP * (params.mlFull / 100);
-  const adsAmt = precioSugeridoCLP * (params.mlAds / 100);
+  const adsAmt = precioSugeridoCLP * (adsPct / 100) + adsFijo;
   const margenAmt = precioSugeridoCLP * (params.margenObjetivo / 100);
 
   const comisionManualPct = precioManual * (params.mlComision / 100);
   const fullManual = precioManual * (params.mlFull / 100);
-  const adsManual = precioManual * (params.mlAds / 100);
+  const adsManual = precioManual * (adsPct / 100) + adsFijo;
   const margenManualUnit = precioManual - costoBodegaCLP - comisionManualPct - comisionFija - fullManual - adsManual;
   const margenManualPct = precioManual > 0 ? margenManualUnit / precioManual * 100 : 0;
   const ingresosTotales = precioManual * u;
@@ -1052,7 +1066,7 @@ function TabPricing({ params, drive }) {
               { label: "Costo en bodega", amt: costoBodegaCLP, color: "info" },
               { label: "Comisi\u00f3n ML (" + params.mlComision + "%)" + (params.mlComisionFijaActiva ? " + $" + fmt(comisionFija) + " fijo" : ""), amt: comisionPctAmt + comisionFija, color: "warning" },
               { label: "Full ML (" + params.mlFull + "%)", amt: fullAmt, color: "warning" },
-              { label: "Publicidad (" + params.mlAds + "%)", amt: adsAmt, color: "danger" },
+              { label: "Publicidad (" + (params.mlAdsMode === "pct" ? params.mlAds + "%" : "$" + fmt(params.mlAdsFijo) + " fijo") + ")", amt: adsAmt, color: "danger" },
               { label: "Tu margen (" + params.margenObjetivo + "%)", amt: margenAmt, color: "success" },
             ].map(item => (
               <div key={item.label} style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>{item.label}</span><span style={{ fontWeight: 500, color: "var(--color-text-" + item.color + ")" }}>${fmt(item.amt)}</span></div>
@@ -1084,6 +1098,20 @@ function TabPricing({ params, drive }) {
                   <div style={S.mc}><p style={S.label}>Margen por unidad</p><p style={{ ...S.val, fontSize: 18, color: margenManualUnit >= 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>${fmt(margenManualUnit)}</p><p style={S.sub}>{pct(margenManualPct)} del precio</p></div>
                   <div style={S.mc}><p style={S.label}>Ingresos totales pedido</p><p style={{ ...S.val, fontSize: 18, color: "var(--color-text-info)" }}>${fmt(ingresosTotales)}</p><p style={S.sub}>{u}u &times; ${fmt(precioManual)}</p></div>
                   <div style={S.mc}><p style={S.label}>Ganancia total pedido</p><p style={{ ...S.val, fontSize: 18, color: gananciaTotalPedido >= 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>${fmt(gananciaTotalPedido)}</p><p style={S.sub}>{u}u &times; ${fmt(margenManualUnit)}</p></div>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <p style={S.sectionLabel}>distribuci&oacute;n precio de venta manual</p>
+                  {[
+                    { label: "Costo en bodega", amt: costoBodegaCLP, color: "info" },
+                    { label: "Comisi\u00f3n ML (" + params.mlComision + "%)" + (params.mlComisionFijaActiva ? " + $" + fmt(comisionFija) + " fijo" : ""), amt: comisionManualPct + comisionFija, color: "warning" },
+                    { label: "Full ML (" + params.mlFull + "%)", amt: fullManual, color: "warning" },
+                    { label: "Publicidad (" + (params.mlAdsMode === "pct" ? params.mlAds + "%" : "$" + fmt(params.mlAdsFijo) + " fijo") + ")", amt: adsManual, color: "danger" },
+                    { label: "Tu margen", amt: margenManualUnit, color: margenManualUnit >= 0 ? "success" : "danger" },
+                  ].map(item => (
+                    <div key={item.label} style={S.row}><span style={{ color: "var(--color-text-secondary)" }}>{item.label}</span><span style={{ fontWeight: 500, color: "var(--color-text-" + item.color + ")" }}>${fmt(item.amt)}</span></div>
+                  ))}
+                  <hr style={S.divider} />
+                  <div style={S.row}><span style={{ fontWeight: 500, fontSize: 13 }}>Precio de venta</span><span style={{ fontWeight: 500, fontSize: 16 }}>${fmt(precioManual)}</span></div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <div style={{ ...S.alert(vsMin >= 0 ? "success" : "danger"), flex: 1, margin: 0 }}>
