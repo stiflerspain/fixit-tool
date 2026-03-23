@@ -53,6 +53,9 @@ El archivo contiene CSS + JSX inline con los siguientes modulos:
 
 ## Changelog
 
+### 2026-03-23
+- **feat: restaurar parametros al cargar cotizacion** — `loadCotizacion()` ahora restaura `parametrosSnapshot` (USD/CLP, arancel, IVA, comisiones ML, margen) para saber exactamente como fue evaluada. `handleNew()` resetea a `DEFAULT_PARAMS`. Notificacion visual al restaurar.
+
 ### 2026-03-22 — d852dfa
 - **fix: carpetas duplicadas en Drive** — `ensureFolderStructure()` se ejecutaba concurrentemente (restore + OAuth callback). Agregado mutex (`_ensurePromise`) y early return si IDs ya estan cacheados.
 - **feat: responsive movil** — Media queries para <768px y <480px. Grids colapsan a 1 columna, tabs con scroll horizontal, header apilado, panel cotizaciones full-width, padding reducido.

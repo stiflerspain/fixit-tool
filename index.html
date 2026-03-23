@@ -859,7 +859,7 @@ function CotizacionesPanel({ open, onClose, cotizaciones, loadingCots, onSelect,
 /* ================================================================
    TAB: Calculadora (pricing) — CON COTIZACIONES
    ================================================================ */
-function TabPricing({ params, drive }) {
+function TabPricing({ params, setParams, drive }) {
   const [prod, setProd] = useState({ nombre: "Nuevo producto", precioAli: 5, unidades: 50, flete: 80 });
   const [precioMinConAds, setPrecioMinConAds] = useState(false);
   const [precioManual, setPrecioManual] = useState(0);
@@ -927,6 +927,7 @@ function TabPricing({ params, drive }) {
     }
     if (cot.precioManual !== undefined) setPrecioManual(cot.precioManual);
     if (cot.precioMinConAds !== undefined) setPrecioMinConAds(cot.precioMinConAds);
+    if (cot.parametrosSnapshot) { setParams(cot.parametrosSnapshot); drive.notify && drive.notify("Parámetros restaurados de la cotización"); }
     setActiveCot(cot);
     setSavedSnapshot(cot);
   };
@@ -965,6 +966,7 @@ function TabPricing({ params, drive }) {
     setProd({ nombre: "Nuevo producto", precioAli: 5, unidades: 50, flete: 80 });
     setPrecioManual(0);
     setPrecioMinConAds(false);
+    setParams(DEFAULT_PARAMS);
     setActiveCot(null);
     setSavedSnapshot(null);
   };
@@ -1559,7 +1561,7 @@ function App() {
       </div>
 
       <div className="content-area" style={{ padding: "20px 24px", maxWidth: 1100, margin: "0 auto" }}>
-        {tab === "pricing" && <TabPricing params={params} drive={drive} />}
+        {tab === "pricing" && <TabPricing params={params} setParams={setParams} drive={drive} />}
         {tab === "dashboard" && <TabDashboard params={params} />}
         {tab === "comparador" && <TabComparador params={params} />}
         {tab === "escalamiento" && <TabEscalamiento params={params} />}
