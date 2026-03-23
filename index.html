@@ -121,6 +121,24 @@
     .cot-filter-btn.active { background: var(--color-background-info); color: var(--color-text-info); border-color: var(--color-border-info); }
     .status-dropdown { font-size: 12px; padding: 5px 10px; border: 1px solid var(--color-border-secondary); border-radius: var(--border-radius-md); background: var(--color-background-secondary); font-family: inherit; cursor: pointer; outline: none; color: var(--color-text-primary); }
     @keyframes toastIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    /* Responsive */
+    @media (max-width: 768px) {
+      .grid-main { grid-template-columns: 1fr !important; }
+      .grid-2 { grid-template-columns: 1fr !important; }
+      .grid-3 { grid-template-columns: 1fr !important; }
+      .grid-4 { grid-template-columns: repeat(2, minmax(0,1fr)) !important; }
+      .header-bar { flex-direction: column; align-items: flex-start !important; gap: 8px !important; padding: 12px 16px !important; }
+      .header-right { width: 100%; justify-content: space-between; }
+      .tab-bar { overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 0 12px !important; }
+      .tab-bar::-webkit-scrollbar { display: none; }
+      .content-area { padding: 12px !important; }
+      .params-area { padding: 12px !important; }
+      .cot-panel { width: 100vw; right: -100vw; }
+      .cot-panel.open { right: 0; }
+    }
+    @media (max-width: 480px) {
+      .grid-4 { grid-template-columns: 1fr !important; }
+    }
   </style>
 </head>
 <body>
@@ -145,6 +163,7 @@ const DriveService = {
   tokenClient: null,
   accessToken: null,
   folderIds: { root: null, cotizaciones: null, facturas: null },
+  _ensurePromise: null,
 
   async init() {
     return new Promise((resolve) => {
@@ -233,13 +252,24 @@ const DriveService = {
   },
 
   async ensureFolderStructure() {
-    let root = await DriveService.findFolder(FIXIT_FOLDER_NAME);
-    DriveService.folderIds.root = root ? root.id : await DriveService.createFolder(FIXIT_FOLDER_NAME);
-    let cot = await DriveService.findFolder(COT_FOLDER_NAME, DriveService.folderIds.root);
-    DriveService.folderIds.cotizaciones = cot ? cot.id : await DriveService.createFolder(COT_FOLDER_NAME, DriveService.folderIds.root);
-    let fac = await DriveService.findFolder(FAC_FOLDER_NAME, DriveService.folderIds.root);
-    DriveService.folderIds.facturas = fac ? fac.id : await DriveService.createFolder(FAC_FOLDER_NAME, DriveService.folderIds.root);
-    return DriveService.folderIds;
+    if (DriveService.folderIds.root && DriveService.folderIds.cotizaciones && DriveService.folderIds.facturas) {
+      return DriveService.folderIds;
+    }
+    if (DriveService._ensurePromise) return DriveService._ensurePromise;
+    DriveService._ensurePromise = (async () => {
+      try {
+        let root = await DriveService.findFolder(FIXIT_FOLDER_NAME);
+        DriveService.folderIds.root = root ? root.id : await DriveService.createFolder(FIXIT_FOLDER_NAME);
+        let cot = await DriveService.findFolder(COT_FOLDER_NAME, DriveService.folderIds.root);
+        DriveService.folderIds.cotizaciones = cot ? cot.id : await DriveService.createFolder(COT_FOLDER_NAME, DriveService.folderIds.root);
+        let fac = await DriveService.findFolder(FAC_FOLDER_NAME, DriveService.folderIds.root);
+        DriveService.folderIds.facturas = fac ? fac.id : await DriveService.createFolder(FAC_FOLDER_NAME, DriveService.folderIds.root);
+        return DriveService.folderIds;
+      } finally {
+        DriveService._ensurePromise = null;
+      }
+    })();
+    return DriveService._ensurePromise;
   },
 
   async listCotizaciones() {
@@ -598,7 +628,7 @@ function ParamsPanel({ params, setParams }) {
   return (
     <div style={{ ...S.card, marginBottom: 0 }}>
       <p style={S.sectionLabel}>par&aacute;metros globales</p>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 16 }}>
+      <div className="grid-2" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 16 }}>
         <div>
           <p style={{ ...S.sectionLabel, marginBottom: 8 }}>importaci&oacute;n</p>
           <UsdClpField params={params} setParams={setParams} />
@@ -981,7 +1011,7 @@ function TabPricing({ params, drive }) {
       )}
 
       {/* Main calculator grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 16 }}>
+      <div className="grid-main" style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 16 }}>
         <div>
           <div style={S.card}>
             <p style={S.sectionLabel}>producto</p>
@@ -1033,7 +1063,7 @@ function TabPricing({ params, drive }) {
         </div>
 
         <div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, marginBottom: 16 }}>
+          <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, marginBottom: 16 }}>
             <div style={S.mc}><p style={S.label}>CIF por unidad</p><p style={{ ...S.val, fontSize: 18, color: "var(--color-text-info)" }}>${fmt(cifCLP)}</p><p style={S.sub}>base para impuestos</p></div>
             <div style={S.mc}><p style={S.label}>Costo en bodega</p><p style={S.val}>${fmt(costoBodegaCLP)}</p><p style={S.sub}>CIF + impuestos + DHL</p></div>
             <div style={S.mc}><p style={S.label}>Precio sugerido ML</p><p style={{ ...S.val, color: "var(--color-text-success)" }}>${fmt(precioSugeridoCLP)}</p><p style={S.sub}>con {params.margenObjetivo}% margen</p></div>
@@ -1094,7 +1124,7 @@ function TabPricing({ params, drive }) {
             <Field label="Precio de venta" value={precioManual} onChange={v => setPrecioManual(v)} unit="CLP" />
             {precioManual > 0 && (
               <>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8, marginBottom: 12 }}>
+                <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8, marginBottom: 12 }}>
                   <div style={S.mc}><p style={S.label}>Margen por unidad</p><p style={{ ...S.val, fontSize: 18, color: margenManualUnit >= 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>${fmt(margenManualUnit)}</p><p style={S.sub}>{pct(margenManualPct)} del precio</p></div>
                   <div style={S.mc}><p style={S.label}>Ingresos totales pedido</p><p style={{ ...S.val, fontSize: 18, color: "var(--color-text-info)" }}>${fmt(ingresosTotales)}</p><p style={S.sub}>{u}u &times; ${fmt(precioManual)}</p></div>
                   <div style={S.mc}><p style={S.label}>Ganancia total pedido</p><p style={{ ...S.val, fontSize: 18, color: gananciaTotalPedido >= 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>${fmt(gananciaTotalPedido)}</p><p style={S.sub}>{u}u &times; ${fmt(margenManualUnit)}</p></div>
@@ -1173,8 +1203,8 @@ function TabDashboard({ params }) {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <div style={S.mc}>
             <p style={S.label}>Publicidad total per&iacute;odo</p>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1201,13 +1231,13 @@ function TabDashboard({ params }) {
               </div>
             </div>
             {isEdit && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 8, marginBottom: 12, padding: 12, background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)" }}>
+              <div className="grid-4" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 8, marginBottom: 12, padding: 12, background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)" }}>
                 {[["Nombre","nombre","text"],["Costo importaci\u00f3n/u","costoImport","number","CLP"],["Ingresos producto","ingProd","number","CLP"],["Cargo venta ML","cargoVenta","number","CLP"],["Env\u00edo neto","envioNeto","number","CLP"],["Total neto ML","neto","number","CLP"],["Ventas con ads","ventasAds","number","u"],["Ventas org\u00e1nicas","ventasOrg","number","u"]].map(([lbl,key,type,unit]) => (
                   <Field key={key} label={lbl} value={s[key]} onChange={v => setSkus(skus.map((x,j) => j===i?{...x,[key]:v}:x))} type={type} unit={unit} />
                 ))}
               </div>
             )}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 8 }}>
+            <div className="grid-4" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 8 }}>
               {[
                 { label: "Ventas totales", val: c.n + "u (" + c.nAds + " ads / " + c.nOrg + " org)", color: "primary" },
                 { label: "Margen con ads", val: c.margenAds !== null ? pct(c.margenAds) : "\u2014", color: colorMargen(c.margenAds), extra: c.netoRealAds !== null ? "$" + fmt(c.netoRealAds) + "/u" : "" },
@@ -1250,7 +1280,7 @@ function TabComparador({ params }) {
 
   return (
     <div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+      <div className="grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
         <div style={S.card}>
           <p style={{ ...S.sectionLabel, color: "#f59e0b" }}>aliexpress</p>
           <Field label="Precio unitario" value={prod.ali_precio} onChange={v => set("ali_precio", v)} unit="USD" />
@@ -1317,7 +1347,7 @@ function TabEscalamiento({ params }) {
 
   return (
     <div>
-      <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16 }}>
+      <div className="grid-main" style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16 }}>
         <div>
           <div style={S.card}>
             <p style={S.sectionLabel}>aliexpress (testeo)</p>
@@ -1337,7 +1367,7 @@ function TabEscalamiento({ params }) {
           </div>
         </div>
         <div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+          <div className="grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
             {[
               { label: "Costo bodega Aliexpress", val: costo_ali, color: "warning" },
               { label: "Costo bodega Alibaba", val: costo_alib, color: "info" },
@@ -1398,7 +1428,7 @@ function TabPublicidad({ params }) {
 
   return (
     <div>
-      <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 16 }}>
+      <div className="grid-main" style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 16 }}>
         <div>
           <div style={S.card}>
             <p style={S.sectionLabel}>tu producto</p>
@@ -1418,7 +1448,7 @@ function TabPublicidad({ params }) {
           </div>
         </div>
         <div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, marginBottom: 16 }}>
+          <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, marginBottom: 16 }}>
             <div style={S.mc}><p style={S.label}>Margen sin publicidad</p><p style={{ ...S.val, color: "var(--color-text-success)" }}>${fmt(margenSinAds)}</p><p style={S.sub}>por unidad &middot; {pct(margenSinAds / cfg.precioVenta * 100)}</p></div>
             <div style={S.mc}><p style={S.label}>Margen con publicidad</p><p style={{ ...S.val, color: margenConAds > 0 ? "var(--color-text-warning)" : "var(--color-text-danger)" }}>${fmt(margenConAds)}</p><p style={S.sub}>por unidad &middot; {pct(margenConAds / cfg.precioVenta * 100)}</p></div>
             <div style={S.mc}><p style={S.label}>ACOS m&aacute;ximo rentable</p><p style={{ ...S.val, color: acosActual <= acosMaxRentable ? "var(--color-text-success)" : "var(--color-text-danger)" }}>{pct(acosMaxRentable)}</p><p style={S.sub}>tu ACOS actual: {pct(acosActual)}</p></div>
@@ -1490,12 +1520,12 @@ function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--color-background-tertiary)", fontFamily: "var(--font-sans)" }}>
-      <div style={{ background: "var(--color-background-primary)", borderBottom: "0.5px solid var(--color-border-tertiary)", padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 10 }}>
+      <div className="header-bar" style={{ background: "var(--color-background-primary)", borderBottom: "0.5px solid var(--color-border-tertiary)", padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 10 }}>
         <div>
           <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 2 }}>FIXIT SPA</div>
           <div style={{ fontSize: 18, fontWeight: 500, color: "var(--color-text-primary)" }}>Centro de control &middot; Importaci&oacute;n & ML</div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {drive.driveStatus === 'connected' ? (
             <div className={'drive-indicator ' + ds.css} title="Conectado a Google Drive">
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--color-text-success)', display: 'inline-block' }} />
@@ -1515,12 +1545,12 @@ function App() {
       </div>
 
       {showParams && (
-        <div style={{ padding: "16px 24px 0", maxWidth: 900, margin: "0 auto" }}>
+        <div className="params-area" style={{ padding: "16px 24px 0", maxWidth: 900, margin: "0 auto" }}>
           <ParamsPanel params={params} setParams={setParams} />
         </div>
       )}
 
-      <div style={{ background: "var(--color-background-primary)", borderBottom: "0.5px solid var(--color-border-tertiary)", padding: "0 24px", display: "flex", gap: 0 }}>
+      <div className="tab-bar" style={{ background: "var(--color-background-primary)", borderBottom: "0.5px solid var(--color-border-tertiary)", padding: "0 24px", display: "flex", gap: 0 }}>
         {TABS.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{ background: "none", border: "none", borderBottom: tab === t.id ? "2px solid var(--color-border-info)" : "2px solid transparent", padding: "12px 16px", cursor: "pointer", fontSize: 13, color: tab === t.id ? "var(--color-text-info)" : "var(--color-text-secondary)", fontFamily: "inherit", transition: "all 0.15s", whiteSpace: "nowrap" }}>
             {t.label}
@@ -1528,7 +1558,7 @@ function App() {
         ))}
       </div>
 
-      <div style={{ padding: "20px 24px", maxWidth: 1100, margin: "0 auto" }}>
+      <div className="content-area" style={{ padding: "20px 24px", maxWidth: 1100, margin: "0 auto" }}>
         {tab === "pricing" && <TabPricing params={params} drive={drive} />}
         {tab === "dashboard" && <TabDashboard params={params} />}
         {tab === "comparador" && <TabComparador params={params} />}
