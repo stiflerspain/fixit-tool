@@ -361,6 +361,245 @@ const DriveService = {
 };
 
 /* ================================================================
+   MERCADOLIBRE — Credenciales y servicio API (PKCE flow)
+   ================================================================ */
+const ML_CLIENT_ID = '8682313366878154';
+const ML_REDIRECT_URI = window.location.origin + (window.location.pathname || '/');
+const ML_AUTH_URL = 'https://auth.mercadolibre.cl/authorization';
+const ML_TOKEN_URL = 'https://api.mercadolibre.com/oauth/token';
+const ML_API_BASE = 'https://api.mercadolibre.com';
+
+const MeliService = {
+  accessToken: null,
+  refreshTokenValue: null,
+  userId: null,
+  tokenExpiry: null,
+
+  async generatePKCE() {
+    const array = new Uint8Array(32);
+    crypto.getRandomValues(array);
+    const verifier = Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
+    const encoder = new TextEncoder();
+    const data = encoder.encode(verifier);
+    const hash = await crypto.subtle.digest('SHA-256', data);
+    const challenge = btoa(String.fromCharCode(...new Uint8Array(hash)))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return { verifier, challenge };
+  },
+
+  async login() {
+    const { verifier, challenge } = await MeliService.generatePKCE();
+    sessionStorage.setItem('ml_code_verifier', verifier);
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: ML_CLIENT_ID,
+      redirect_uri: ML_REDIRECT_URI,
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+    });
+    window.location.href = ML_AUTH_URL + '?' + params.toString();
+  },
+
+  async handleCallback(code) {
+    const verifier = sessionStorage.getItem('ml_code_verifier');
+    if (!verifier) throw new Error('No code verifier found');
+    sessionStorage.removeItem('ml_code_verifier');
+
+    const body = new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: ML_CLIENT_ID,
+      code: code,
+      redirect_uri: ML_REDIRECT_URI,
+      code_verifier: verifier,
+    });
+
+    const resp = await fetch(ML_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+      body: body.toString(),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.message || 'Token exchange failed: ' + resp.status);
+    }
+    const data = await resp.json();
+    MeliService._saveToken(data);
+    return data;
+  },
+
+  async refreshToken() {
+    if (!MeliService.refreshTokenValue) throw new Error('No refresh token');
+    const body = new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: ML_CLIENT_ID,
+      refresh_token: MeliService.refreshTokenValue,
+    });
+    const resp = await fetch(ML_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+      body: body.toString(),
+    });
+    if (!resp.ok) {
+      MeliService.logout();
+      throw new Error('Refresh token failed');
+    }
+    const data = await resp.json();
+    MeliService._saveToken(data);
+    return data;
+  },
+
+  _saveToken(data) {
+    MeliService.accessToken = data.access_token;
+    MeliService.refreshTokenValue = data.refresh_token;
+    MeliService.userId = data.user_id;
+    MeliService.tokenExpiry = Date.now() + (data.expires_in * 1000);
+    sessionStorage.setItem('ml_token', JSON.stringify({
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      userId: data.user_id,
+      expiry: MeliService.tokenExpiry,
+    }));
+  },
+
+  restoreSession() {
+    try {
+      const saved = sessionStorage.getItem('ml_token');
+      if (!saved) return false;
+      const data = JSON.parse(saved);
+      if (data.expiry > Date.now()) {
+        MeliService.accessToken = data.accessToken;
+        MeliService.refreshTokenValue = data.refreshToken;
+        MeliService.userId = data.userId;
+        MeliService.tokenExpiry = data.expiry;
+        return true;
+      }
+      // Token expired but we have refresh token
+      if (data.refreshToken) {
+        MeliService.refreshTokenValue = data.refreshToken;
+        MeliService.userId = data.userId;
+        return 'needs_refresh';
+      }
+      sessionStorage.removeItem('ml_token');
+      return false;
+    } catch (e) { return false; }
+  },
+
+  logout() {
+    MeliService.accessToken = null;
+    MeliService.refreshTokenValue = null;
+    MeliService.userId = null;
+    MeliService.tokenExpiry = null;
+    sessionStorage.removeItem('ml_token');
+  },
+
+  isAuthenticated() {
+    return !!MeliService.accessToken && MeliService.tokenExpiry > Date.now();
+  },
+
+  async api(path, params) {
+    if (!MeliService.isAuthenticated()) {
+      if (MeliService.refreshTokenValue) {
+        await MeliService.refreshToken();
+      } else {
+        throw new Error('Not authenticated');
+      }
+    }
+    const url = new URL(ML_API_BASE + path);
+    if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+    let resp = await fetch(url.toString(), {
+      headers: { 'Authorization': 'Bearer ' + MeliService.accessToken },
+    });
+    if (resp.status === 401 && MeliService.refreshTokenValue) {
+      await MeliService.refreshToken();
+      resp = await fetch(url.toString(), {
+        headers: { 'Authorization': 'Bearer ' + MeliService.accessToken },
+      });
+    }
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.message || 'API error: ' + resp.status);
+    }
+    return resp.json();
+  },
+
+  async apiAll(path, params, limitPerPage) {
+    limitPerPage = limitPerPage || 50;
+    let allResults = [];
+    let offset = 0;
+    let total = null;
+    do {
+      const p = Object.assign({}, params, { limit: limitPerPage, offset: offset });
+      const data = await MeliService.api(path, p);
+      const results = data.results || [];
+      allResults = allResults.concat(results);
+      total = data.paging ? data.paging.total : results.length;
+      offset += limitPerPage;
+    } while (offset < total && total > 0);
+    return allResults;
+  },
+};
+
+// Handle ML OAuth callback on page load
+(function() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const code = urlParams.get('code');
+  if (code && sessionStorage.getItem('ml_code_verifier')) {
+    window._mlAuthCode = code;
+    history.replaceState(null, '', window.location.pathname);
+  }
+})();
+
+/* ================================================================
+   DRIVE — Funciones de mapeo ML
+   ================================================================ */
+const MlMappingService = {
+  _fileId: null,
+
+  async load() {
+    if (!DriveService.isAuthenticated()) return { mappings: {} };
+    if (!DriveService.folderIds.root) await DriveService.ensureFolderStructure();
+    try {
+      const resp = await gapi.client.drive.files.list({
+        q: "'" + DriveService.folderIds.root + "' in parents and name='ml-mappings.json' and trashed=false",
+        fields: 'files(id,name)',
+        spaces: 'drive',
+      });
+      const files = resp.result.files || [];
+      if (files.length > 0) {
+        MlMappingService._fileId = files[0].id;
+        return await DriveService.readFile(files[0].id);
+      }
+    } catch (e) { console.warn('Error loading ML mappings:', e); }
+    return { mappings: {} };
+  },
+
+  async save(data) {
+    if (!DriveService.isAuthenticated()) return;
+    if (!DriveService.folderIds.root) await DriveService.ensureFolderStructure();
+    const content = JSON.stringify(data, null, 2);
+    if (MlMappingService._fileId) {
+      await fetch('https://www.googleapis.com/upload/drive/v3/files/' + MlMappingService._fileId + '?uploadType=media', {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + DriveService.accessToken, 'Content-Type': 'application/json' },
+        body: content,
+      });
+    } else {
+      const metadata = { name: 'ml-mappings.json', parents: [DriveService.folderIds.root], mimeType: 'application/json' };
+      const form = new FormData();
+      form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+      form.append('file', new Blob([content], { type: 'application/json' }));
+      const resp = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + DriveService.accessToken },
+        body: form,
+      });
+      const result = await resp.json();
+      MlMappingService._fileId = result.id;
+    }
+  },
+};
+
+/* ================================================================
    HOOK: useGoogleDrive
    ================================================================ */
 function useGoogleDrive() {
@@ -502,6 +741,164 @@ function useGoogleDrive() {
     refreshCotizaciones: refreshCotizaciones, saveCotizacion: saveCotizacion, deleteCotizacion: deleteCotizacion,
     uploadAttachment: uploadAttachment, listAttachments: listAttachments, deleteAttachment: deleteAttachment,
     notification: notification, notify: notify,
+  };
+}
+
+/* ================================================================
+   HOOK: useMercadoLibre
+   ================================================================ */
+function useMercadoLibre(drive) {
+  const [meliStatus, setMeliStatus] = useState('disconnected');
+  const [meliUser, setMeliUser] = useState(null);
+  const [items, setItems] = useState([]);
+  const [dashData, setDashData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+  const [mappings, setMappings] = useState({ mappings: {} });
+
+  // Restore session & handle callback
+  useEffect(function() {
+    (async function() {
+      // Handle OAuth callback
+      if (window._mlAuthCode) {
+        var code = window._mlAuthCode;
+        delete window._mlAuthCode;
+        setMeliStatus('loading');
+        try {
+          await MeliService.handleCallback(code);
+          var user = await MeliService.api('/users/me');
+          setMeliUser({ id: user.id, nickname: user.nickname });
+          setMeliStatus('connected');
+        } catch (e) {
+          console.error('ML auth error:', e);
+          setMeliStatus('error');
+        }
+        return;
+      }
+      // Try restore
+      var restored = MeliService.restoreSession();
+      if (restored === true) {
+        setMeliStatus('connected');
+        try {
+          var user = await MeliService.api('/users/me');
+          setMeliUser({ id: user.id, nickname: user.nickname });
+        } catch (e) { setMeliStatus('disconnected'); MeliService.logout(); }
+      } else if (restored === 'needs_refresh') {
+        try {
+          await MeliService.refreshToken();
+          var user = await MeliService.api('/users/me');
+          setMeliUser({ id: user.id, nickname: user.nickname });
+          setMeliStatus('connected');
+        } catch (e) { setMeliStatus('disconnected'); MeliService.logout(); }
+      }
+    })();
+  }, []);
+
+  // Load mappings when drive is connected
+  useEffect(function() {
+    if (drive && drive.driveStatus === 'connected') {
+      MlMappingService.load().then(function(data) {
+        setMappings(data || { mappings: {} });
+      }).catch(function() {});
+    }
+  }, [drive && drive.driveStatus]);
+
+  var login = useCallback(function() {
+    MeliService.login();
+  }, []);
+
+  var logout = useCallback(function() {
+    MeliService.logout();
+    setMeliStatus('disconnected');
+    setMeliUser(null);
+    setItems([]);
+    setDashData(null);
+  }, []);
+
+  var saveMappings = useCallback(async function(newMappings) {
+    setMappings(newMappings);
+    if (drive && drive.driveStatus === 'connected') {
+      try { await MlMappingService.save(newMappings); } catch (e) { console.warn('Error saving mappings:', e); }
+    }
+  }, [drive]);
+
+  var fetchDashboardData = useCallback(async function(dateFrom, dateTo) {
+    if (!MeliService.isAuthenticated()) return;
+    setLoading(true);
+    try {
+      var sellerId = MeliService.userId;
+
+      // 1. Fetch seller items
+      var itemSearch = await MeliService.api('/users/' + sellerId + '/items/search', { limit: 50 });
+      var itemIds = itemSearch.results || [];
+      if (itemIds.length === 0) { setItems([]); setDashData({ orders: [], shipments: {}, visits: {} }); setLoading(false); setLastSync(new Date()); return; }
+
+      // 2. Multi-get item details (max 20 per request)
+      var allItems = [];
+      for (var i = 0; i < itemIds.length; i += 20) {
+        var batch = itemIds.slice(i, i + 20);
+        var resp = await MeliService.api('/items', { ids: batch.join(',') });
+        for (var j = 0; j < resp.length; j++) {
+          if (resp[j].code === 200) allItems.push(resp[j].body);
+        }
+      }
+      setItems(allItems);
+
+      // 3. Fetch orders in date range
+      var allOrders = await MeliService.apiAll('/orders/search', {
+        seller: sellerId,
+        'order.date_created.from': dateFrom,
+        'order.date_created.to': dateTo,
+        sort: 'date_desc',
+      }, 50);
+
+      // 4. Extract shipment IDs and fetch costs
+      var shipmentIds = {};
+      var shipmentCosts = {};
+      for (var k = 0; k < allOrders.length; k++) {
+        var order = allOrders[k];
+        if (order.shipping && order.shipping.id && !shipmentIds[order.shipping.id]) {
+          shipmentIds[order.shipping.id] = true;
+        }
+      }
+      var shipIds = Object.keys(shipmentIds);
+      for (var s = 0; s < shipIds.length; s++) {
+        try {
+          var costs = await MeliService.api('/shipments/' + shipIds[s] + '/costs');
+          shipmentCosts[shipIds[s]] = costs;
+        } catch (e) { shipmentCosts[shipIds[s]] = null; }
+      }
+
+      // 5. Fetch visits
+      var visits = {};
+      for (var v = 0; v < itemIds.length; v += 50) {
+        var vBatch = itemIds.slice(v, v + 50);
+        try {
+          var vResp = await MeliService.api('/items/visits', {
+            ids: vBatch.join(','),
+            date_from: dateFrom.split('T')[0],
+            date_to: dateTo.split('T')[0],
+          });
+          // vResp is an object { itemId: count } or array
+          if (typeof vResp === 'object' && !Array.isArray(vResp)) {
+            Object.assign(visits, vResp);
+          }
+        } catch (e) { /* visits endpoint may fail, non-critical */ }
+      }
+
+      setDashData({ orders: allOrders, shipments: shipmentCosts, visits: visits });
+      setLastSync(new Date());
+    } catch (e) {
+      console.error('Error fetching dashboard data:', e);
+    }
+    setLoading(false);
+  }, []);
+
+  return {
+    meliStatus: meliStatus, meliUser: meliUser, login: login, logout: logout,
+    items: items, dashData: dashData, loading: loading, lastSync: lastSync,
+    mappings: mappings, saveMappings: saveMappings,
+    fetchDashboardData: fetchDashboardData,
   };
 }
 
@@ -1177,85 +1574,312 @@ function TabPricing({ params, setParams, drive }) {
 /* ================================================================
    EXISTING TABS — Dashboard, Comparador, Escalamiento, Publicidad
    ================================================================ */
-function TabDashboard({ params }) {
-  const [skus, setSkus] = useState([
-    { nombre: "Almohadillas AirPods Pro", costoImport: 2640, ingProd: 213045, cargoVenta: -58709, envioNeto: 17840, neto: 172176, ventasAds: 15, ventasOrg: 8 },
-    { nombre: "Kit 15 Mechas Tubeless", costoImport: 2808, ingProd: 38750, cargoVenta: -10474, envioNeto: 0, neto: 28276, ventasAds: 4, ventasOrg: 2 },
-    { nombre: "10x Tripas Tubeless", costoImport: 526, ingProd: 14220, cargoVenta: -4385, envioNeto: 0, neto: 9835, ventasAds: 3, ventasOrg: 0 },
-    { nombre: "Android Auto CarPlay", costoImport: 5800, ingProd: 19180, cargoVenta: -4261, envioNeto: -6200, neto: 8719, ventasAds: 1, ventasOrg: 0 },
-  ]);
-  const [pubGlobal, setPubGlobal] = useState(101768);
-  const [editIdx, setEditIdx] = useState(null);
+function TabDashboard({ params, drive, meli }) {
+  const [dateRange, setDateRange] = useState('7d');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [pubGlobal, setPubGlobal] = useState(0);
+  const [mappingItem, setMappingItem] = useState(null); // item id being mapped
 
-  const totalAdsN = skus.reduce((a, s) => a + s.ventasAds, 0);
-  const pubPorVentaAds = totalAdsN > 0 ? pubGlobal / totalAdsN : 0;
-
-  const calcSku = (s) => {
-    const nAds = s.ventasAds, nOrg = s.ventasOrg, n = nAds + nOrg;
-    const netoMLAds = nAds > 0 ? s.neto * nAds / n : 0;
-    const netoMLOrg = nOrg > 0 ? s.neto * nOrg / n : 0;
-    const netoRealAds = nAds > 0 ? netoMLAds / nAds - pubPorVentaAds - s.costoImport : null;
-    const netoRealOrg = nOrg > 0 ? netoMLOrg / nOrg - s.costoImport : null;
-    const margenAds = nAds > 0 && s.ingProd > 0 ? netoRealAds / (s.ingProd / n) * 100 : null;
-    const margenOrg = nOrg > 0 && s.ingProd > 0 ? netoRealOrg / (s.ingProd / n) * 100 : null;
-    return { netoRealAds: netoRealAds, netoRealOrg: netoRealOrg, margenAds: margenAds, margenOrg: margenOrg, pubTotal: pubPorVentaAds * nAds, n: n, nAds: nAds, nOrg: nOrg };
+  const getDateRange = () => {
+    const now = new Date();
+    const to = now.toISOString();
+    if (dateRange === 'today') {
+      const from = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      return { from, to };
+    } else if (dateRange === '7d') {
+      const from = new Date(now.getTime() - 7 * 86400000).toISOString();
+      return { from, to };
+    } else if (dateRange === '30d') {
+      const from = new Date(now.getTime() - 30 * 86400000).toISOString();
+      return { from, to };
+    } else if (dateRange === 'custom' && customFrom && customTo) {
+      return { from: new Date(customFrom).toISOString(), to: new Date(customTo + 'T23:59:59').toISOString() };
+    }
+    const from = new Date(now.getTime() - 7 * 86400000).toISOString();
+    return { from, to };
   };
 
+  const handleSync = () => {
+    if (meli.meliStatus !== 'connected') return;
+    const { from, to } = getDateRange();
+    meli.fetchDashboardData(from, to);
+  };
+
+  // Auto-sync on connect or date change
+  useEffect(() => {
+    if (meli.meliStatus === 'connected') handleSync();
+  }, [meli.meliStatus, dateRange, customFrom, customTo]);
+
+  // Build per-item data from orders
+  const itemData = React.useMemo(() => {
+    if (!meli.dashData || !meli.items.length) return {};
+    const data = {};
+    meli.items.forEach(item => {
+      data[item.id] = { id: item.id, title: item.title, thumbnail: item.thumbnail, price: item.price, status: item.status, permalink: item.permalink,
+        totalQty: 0, totalRevenue: 0, totalFee: 0, totalShipping: 0, shipmentIds: {} };
+    });
+    (meli.dashData.orders || []).forEach(order => {
+      if (order.status !== 'paid') return;
+      (order.order_items || []).forEach(oi => {
+        var itemId = oi.item && oi.item.id;
+        if (!itemId || !data[itemId]) return;
+        var d = data[itemId];
+        d.totalQty += oi.quantity;
+        d.totalRevenue += oi.unit_price * oi.quantity;
+        d.totalFee += oi.sale_fee || 0;
+      });
+      if (order.shipping && order.shipping.id) {
+        (order.order_items || []).forEach(oi => {
+          var itemId = oi.item && oi.item.id;
+          if (itemId && data[itemId]) data[itemId].shipmentIds[order.shipping.id] = true;
+        });
+      }
+    });
+    // Add shipping costs
+    Object.values(data).forEach(d => {
+      Object.keys(d.shipmentIds).forEach(sid => {
+        var sc = meli.dashData.shipments[sid];
+        if (sc) {
+          d.totalShipping += (sc.receiver && sc.receiver.cost || 0) - (sc.senders && sc.senders[0] && sc.senders[0].cost || 0);
+        }
+      });
+    });
+    return data;
+  }, [meli.dashData, meli.items]);
+
+  // Get cotizacion cost by ID
+  const getCotCost = (cotId) => {
+    if (!drive || !drive.cotizaciones) return null;
+    var cot = drive.cotizaciones.find(c => c.id === cotId);
+    return cot && cot.resultados ? cot.resultados.costoBodegaCLP : null;
+  };
+
+  // Calculate weighted cost for an item
+  const getWeightedCost = (itemId) => {
+    var m = meli.mappings.mappings[itemId];
+    if (!m || !m.cotizaciones || m.cotizaciones.length === 0) return null;
+    var totalCost = 0, totalUnits = 0;
+    m.cotizaciones.forEach(cotId => {
+      var cost = getCotCost(cotId);
+      var units = (m.unidadesPorCot && m.unidadesPorCot[cotId]) || 1;
+      if (cost !== null) { totalCost += cost * units; totalUnits += units; }
+    });
+    return totalUnits > 0 ? totalCost / totalUnits : null;
+  };
+
+  // Toggle cotizacion mapping
+  const toggleCotMapping = (itemId, cotId) => {
+    var current = meli.mappings.mappings[itemId] || { cotizaciones: [], unidadesPorCot: {} };
+    var cots = current.cotizaciones.slice();
+    var units = Object.assign({}, current.unidadesPorCot);
+    var idx = cots.indexOf(cotId);
+    if (idx >= 0) { cots.splice(idx, 1); delete units[cotId]; }
+    else { cots.push(cotId); units[cotId] = 1; }
+    var newMappings = Object.assign({}, meli.mappings, { mappings: Object.assign({}, meli.mappings.mappings, { [itemId]: { cotizaciones: cots, unidadesPorCot: units } }) });
+    meli.saveMappings(newMappings);
+  };
+
+  const setCotUnits = (itemId, cotId, units) => {
+    var current = meli.mappings.mappings[itemId] || { cotizaciones: [], unidadesPorCot: {} };
+    var newUnits = Object.assign({}, current.unidadesPorCot, { [cotId]: parseFloat(units) || 1 });
+    var newMappings = Object.assign({}, meli.mappings, { mappings: Object.assign({}, meli.mappings.mappings, { [itemId]: { cotizaciones: current.cotizaciones, unidadesPorCot: newUnits } }) });
+    meli.saveMappings(newMappings);
+  };
+
+  // Global KPIs
+  const allItemData = Object.values(itemData);
+  const totalQty = allItemData.reduce((a, d) => a + d.totalQty, 0);
+  const totalRevenue = allItemData.reduce((a, d) => a + d.totalRevenue, 0);
+  const totalFees = allItemData.reduce((a, d) => a + d.totalFee, 0);
+  const totalShipping = allItemData.reduce((a, d) => a + d.totalShipping, 0);
+  const totalNeto = totalRevenue - totalFees - totalShipping;
+  const pubPorVenta = totalQty > 0 ? pubGlobal / totalQty : 0;
+
+  // Weighted average margin (only items with cost assigned)
+  var marginSum = 0, marginWeight = 0;
+  allItemData.forEach(d => {
+    var wc = getWeightedCost(d.id);
+    if (wc !== null && d.totalQty > 0 && d.totalRevenue > 0) {
+      var costoTotal = wc * d.totalQty;
+      var pubItem = pubPorVenta * d.totalQty;
+      var ganancia = (d.totalRevenue - d.totalFee - d.totalShipping) - costoTotal - pubItem;
+      var margen = ganancia / d.totalRevenue * 100;
+      marginSum += margen * d.totalRevenue;
+      marginWeight += d.totalRevenue;
+    }
+  });
+  const avgMargin = marginWeight > 0 ? marginSum / marginWeight : null;
+
   const colorMargen = (v) => v === null ? "secondary" : v > 20 ? "success" : v > 0 ? "warning" : "danger";
+  const btnStyle = (active) => ({ fontSize: 12, padding: "6px 14px", background: active ? "var(--color-background-info)" : "var(--color-background-secondary)", border: "0.5px solid " + (active ? "var(--color-border-info)" : "var(--color-border-secondary)"), borderRadius: "var(--border-radius-md)", cursor: "pointer", color: active ? "var(--color-text-info)" : "var(--color-text-secondary)", fontFamily: "inherit" });
+
+  // Not connected state
+  if (meli.meliStatus !== 'connected') {
+    return (
+      <div style={{ textAlign: "center", padding: "60px 20px" }}>
+        <div style={{ fontSize: 40, marginBottom: 16 }}>&#128722;</div>
+        <h3 style={{ margin: "0 0 8px", color: "var(--color-text-primary)" }}>Conecta tu cuenta de MercadoLibre</h3>
+        <p style={{ color: "var(--color-text-secondary)", marginBottom: 20, fontSize: 14 }}>Sincroniza tus ventas, comisiones y envios para calcular el margen real de cada producto.</p>
+        <button onClick={meli.login} style={{ ...btnStyle(true), fontSize: 14, padding: "10px 24px" }}>
+          {meli.meliStatus === 'loading' ? 'Conectando...' : 'Conectar MercadoLibre'}
+        </button>
+        {meli.meliStatus === 'error' && <p style={{ color: "var(--color-text-danger)", marginTop: 12, fontSize: 13 }}>Error de conexion. Intenta nuevamente.</p>}
+      </div>
+    );
+  }
 
   return (
     <div>
+      {/* Controls bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          {[['today','Hoy'],['7d','7 dias'],['30d','30 dias'],['custom','Personalizado']].map(([id,label]) => (
+            <button key={id} onClick={() => setDateRange(id)} style={btnStyle(dateRange === id)}>{label}</button>
+          ))}
+          {dateRange === 'custom' && (
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              <input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)} style={{ ...S.input, fontSize: 12, padding: "5px 8px" }} />
+              <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>a</span>
+              <input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)} style={{ ...S.input, fontSize: 12, padding: "5px 8px" }} />
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={S.mc}>
-            <p style={S.label}>Publicidad total per&iacute;odo</p>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>$</span>
-              <input type="number" value={pubGlobal} onChange={e => setPubGlobal(parseFloat(e.target.value) || 0)} style={{ ...S.input, width: 120, fontSize: 16, fontWeight: 500 }} />
-              <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>CLP</span>
+            <p style={{ ...S.label, marginBottom: 2 }}>Publicidad total</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>$</span>
+              <input type="number" value={pubGlobal} onChange={e => setPubGlobal(parseFloat(e.target.value) || 0)} style={{ ...S.input, width: 100, fontSize: 13, fontWeight: 500 }} />
             </div>
           </div>
-          <div style={S.mc}><p style={S.label}>Costo ads / venta ads</p><p style={{ ...S.val, fontSize: 18, color: "var(--color-text-danger)" }}>${fmt(pubPorVentaAds)}</p></div>
+          <button onClick={handleSync} disabled={meli.loading} style={{ ...btnStyle(false), display: "flex", alignItems: "center", gap: 4 }}>
+            {meli.loading ? '&#8987; Sincronizando...' : '&#8635; Sincronizar'}
+          </button>
+          {meli.lastSync && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>Sync: {meli.lastSync.toLocaleTimeString('es-CL')}</span>}
         </div>
-        <button onClick={() => setSkus([...skus, { nombre: "Nuevo SKU", costoImport: 0, ingProd: 0, cargoVenta: 0, envioNeto: 0, neto: 0, ventasAds: 0, ventasOrg: 0 }])} style={{ fontSize: 12, padding: "7px 14px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", cursor: "pointer", color: "var(--color-text-primary)", fontFamily: "inherit" }}>+ SKU</button>
       </div>
-      {skus.map((s, i) => {
-        const c = calcSku(s);
-        const isEdit = editIdx === i;
-        const borderColor = c.netoRealAds < 0 || c.netoRealOrg < 0 ? "var(--color-border-danger)" : c.netoRealOrg > 3000 ? "var(--color-border-success)" : "var(--color-border-warning)";
+
+      {/* KPI cards */}
+      <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10, marginBottom: 16 }}>
+        {[
+          { label: "Ventas totales", val: totalQty + " unid.", color: "primary" },
+          { label: "Ingresos brutos", val: "$" + fmt(totalRevenue), color: "primary" },
+          { label: "Comisiones ML", val: "$" + fmt(totalFees), color: "danger" },
+          { label: "Envio neto", val: "$" + fmt(totalShipping), color: totalShipping >= 0 ? "success" : "danger" },
+          { label: "Neto total", val: "$" + fmt(totalNeto), color: totalNeto >= 0 ? "success" : "danger" },
+          { label: "Margen promedio", val: avgMargin !== null ? pct(avgMargin) : "Sin datos", color: colorMargen(avgMargin), sub: avgMargin === null ? "Asigna cotizaciones" : "" },
+        ].map(kpi => (
+          <div key={kpi.label} style={S.mc}>
+            <p style={S.label}>{kpi.label}</p>
+            <p style={{ fontSize: 20, fontWeight: 500, margin: 0, color: "var(--color-text-" + kpi.color + ")" }}>{kpi.val}</p>
+            {kpi.sub && <p style={S.sub}>{kpi.sub}</p>}
+          </div>
+        ))}
+      </div>
+
+      {/* Loading state */}
+      {meli.loading && <div style={{ textAlign: "center", padding: 20, color: "var(--color-text-tertiary)" }}>&#8987; Cargando datos de MercadoLibre...</div>}
+
+      {/* Product cards */}
+      {!meli.loading && meli.items.map(item => {
+        var d = itemData[item.id] || { totalQty: 0, totalRevenue: 0, totalFee: 0, totalShipping: 0 };
+        var wc = getWeightedCost(item.id);
+        var netoItem = d.totalRevenue - d.totalFee - d.totalShipping;
+        var costoImportTotal = wc !== null ? wc * d.totalQty : null;
+        var pubItem = pubPorVenta * d.totalQty;
+        var ganancia = costoImportTotal !== null ? netoItem - costoImportTotal - pubItem : null;
+        var margen = ganancia !== null && d.totalRevenue > 0 ? ganancia / d.totalRevenue * 100 : null;
+        var visits = meli.dashData && meli.dashData.visits && meli.dashData.visits[item.id] || 0;
+        var conversion = visits > 0 ? d.totalQty / visits * 100 : null;
+        var borderColor = margen === null ? "var(--color-border-tertiary)" : margen > 20 ? "var(--color-border-success)" : margen > 0 ? "var(--color-border-warning)" : "var(--color-border-danger)";
+        var isMappingOpen = mappingItem === item.id;
+        var currentMapping = meli.mappings.mappings[item.id] || { cotizaciones: [], unidadesPorCot: {} };
+
         return (
-          <div key={i} style={{ ...S.card, borderLeft: "3px solid " + borderColor }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isEdit ? 12 : 6 }}>
-              <span style={{ fontWeight: 500, fontSize: 14 }}>{s.nombre}</span>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={() => setEditIdx(isEdit ? null : i)} style={{ fontSize: 11, padding: "3px 10px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-md)", cursor: "pointer", color: "var(--color-text-secondary)", fontFamily: "inherit" }}>{isEdit ? "cerrar" : "editar"}</button>
-                <button onClick={() => setSkus(skus.filter((_, j) => j !== i))} style={{ fontSize: 11, padding: "3px 10px", background: "var(--color-background-danger)", border: "none", borderRadius: "var(--border-radius-md)", cursor: "pointer", color: "var(--color-text-danger)", fontFamily: "inherit" }}>&times;</button>
+          <div key={item.id} style={{ ...S.card, borderLeft: "3px solid " + borderColor }}>
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+              {item.thumbnail && <img src={item.thumbnail} alt="" style={{ width: 40, height: 40, borderRadius: "var(--border-radius-sm)", objectFit: "cover" }} />}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 500, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 2 }}>
+                  <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>${fmt(item.price)}</span>
+                  <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 100, background: item.status === 'active' ? "var(--color-background-success)" : "var(--color-background-warning)", color: item.status === 'active' ? "var(--color-text-success)" : "var(--color-text-warning)" }}>{item.status === 'active' ? 'Activo' : item.status === 'paused' ? 'Pausado' : item.status}</span>
+                  <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>{item.id}</span>
+                </div>
               </div>
+              <button onClick={() => setMappingItem(isMappingOpen ? null : item.id)} style={{ ...btnStyle(isMappingOpen), fontSize: 11, padding: "4px 10px" }}>
+                {currentMapping.cotizaciones.length > 0 ? currentMapping.cotizaciones.length + ' cot.' : 'Asignar cot.'}
+              </button>
             </div>
-            {isEdit && (
-              <div className="grid-4" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 8, marginBottom: 12, padding: 12, background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)" }}>
-                {[["Nombre","nombre","text"],["Costo importaci\u00f3n/u","costoImport","number","CLP"],["Ingresos producto","ingProd","number","CLP"],["Cargo venta ML","cargoVenta","number","CLP"],["Env\u00edo neto","envioNeto","number","CLP"],["Total neto ML","neto","number","CLP"],["Ventas con ads","ventasAds","number","u"],["Ventas org\u00e1nicas","ventasOrg","number","u"]].map(([lbl,key,type,unit]) => (
-                  <Field key={key} label={lbl} value={s[key]} onChange={v => setSkus(skus.map((x,j) => j===i?{...x,[key]:v}:x))} type={type} unit={unit} />
-                ))}
+
+            {/* Cotizacion mapping panel */}
+            {isMappingOpen && (
+              <div style={{ padding: 12, background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", marginBottom: 10 }}>
+                <p style={{ ...S.label, marginBottom: 8 }}>Asignar cotizaciones</p>
+                {drive && drive.cotizaciones && drive.cotizaciones.length > 0 ? (
+                  <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                    {drive.cotizaciones.map(cot => {
+                      var isChecked = currentMapping.cotizaciones.indexOf(cot.id) >= 0;
+                      var cotUnits = currentMapping.unidadesPorCot[cot.id] || 1;
+                      return (
+                        <div key={cot.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+                          <input type="checkbox" checked={isChecked} onChange={() => toggleCotMapping(item.id, cot.id)} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <span style={{ fontSize: 12, fontWeight: isChecked ? 500 : 400 }}>{cot.id} - {cot.producto ? cot.producto.nombre : 'Sin nombre'}</span>
+                            {cot.resultados && <span style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginLeft: 6 }}>${fmt(cot.resultados.costoBodegaCLP)}/u</span>}
+                          </div>
+                          {isChecked && (
+                            <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                              <input type="number" value={cotUnits} onChange={e => setCotUnits(item.id, cot.id, e.target.value)} style={{ ...S.input, width: 50, fontSize: 11, padding: "2px 4px", textAlign: "center" }} min="1" />
+                              <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>u</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p style={{ fontSize: 12, color: "var(--color-text-tertiary)", margin: 0 }}>
+                    {drive && drive.driveStatus === 'connected' ? 'No hay cotizaciones guardadas. Crea una en la pesta\u00f1a Calculadora.' : 'Conecta Google Drive para ver cotizaciones.'}
+                  </p>
+                )}
+                {wc !== null && <div style={{ marginTop: 8, padding: "6px 10px", background: "var(--color-background-info)", borderRadius: "var(--border-radius-sm)", fontSize: 12, color: "var(--color-text-info)" }}>Costo ponderado: ${fmt(wc)}/u</div>}
               </div>
             )}
-            <div className="grid-4" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 8 }}>
+
+            {/* Metrics grid */}
+            <div className="grid-4" style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0,1fr))", gap: 8 }}>
               {[
-                { label: "Ventas totales", val: c.n + "u (" + c.nAds + " ads / " + c.nOrg + " org)", color: "primary" },
-                { label: "Margen con ads", val: c.margenAds !== null ? pct(c.margenAds) : "\u2014", color: colorMargen(c.margenAds), extra: c.netoRealAds !== null ? "$" + fmt(c.netoRealAds) + "/u" : "" },
-                { label: "Margen org\u00e1nico", val: c.margenOrg !== null ? pct(c.margenOrg) : "\u2014", color: colorMargen(c.margenOrg), extra: c.netoRealOrg !== null ? "$" + fmt(c.netoRealOrg) + "/u" : "" },
-                { label: "Costo publicidad", val: "$" + fmt(c.pubTotal), color: c.pubTotal > 0 ? "danger" : "secondary" },
-              ].map(item => (
-                <div key={item.label} style={S.mc}>
-                  <p style={S.label}>{item.label}</p>
-                  <p style={{ fontSize: 16, fontWeight: 500, margin: 0, color: "var(--color-text-" + item.color + ")" }}>{item.val}</p>
-                  {item.extra && <p style={S.sub}>{item.extra}</p>}
+                { label: "Vendidas", val: d.totalQty + "u", color: "primary" },
+                { label: "Ingresos", val: "$" + fmt(d.totalRevenue), color: "primary" },
+                { label: "Comision ML", val: "$" + fmt(d.totalFee), color: "danger" },
+                { label: "Envio neto", val: "$" + fmt(d.totalShipping), color: d.totalShipping >= 0 ? "success" : "danger" },
+                { label: "Neto ML", val: "$" + fmt(netoItem), color: netoItem >= 0 ? "success" : "danger" },
+                { label: "Costo import.", val: costoImportTotal !== null ? "$" + fmt(costoImportTotal) : "\u2014", color: "secondary", sub: wc !== null ? "$" + fmt(wc) + "/u" : "Sin cotizacion" },
+                { label: "Publicidad", val: "$" + fmt(pubItem), color: pubItem > 0 ? "danger" : "secondary" },
+                { label: "Ganancia", val: ganancia !== null ? "$" + fmt(ganancia) : "\u2014", color: ganancia !== null ? (ganancia > 0 ? "success" : "danger") : "secondary" },
+                { label: "Margen real", val: margen !== null ? pct(margen) : "\u2014", color: colorMargen(margen) },
+                { label: "Visitas / Conv.", val: fmt(visits) + " / " + (conversion !== null ? pct(conversion) : "\u2014"), color: "secondary" },
+              ].map(m => (
+                <div key={m.label} style={S.mc}>
+                  <p style={S.label}>{m.label}</p>
+                  <p style={{ fontSize: 14, fontWeight: 500, margin: 0, color: "var(--color-text-" + m.color + ")" }}>{m.val}</p>
+                  {m.sub && <p style={S.sub}>{m.sub}</p>}
                 </div>
               ))}
             </div>
           </div>
         );
       })}
+
+      {/* Empty state */}
+      {!meli.loading && meli.items.length === 0 && meli.dashData && (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--color-text-tertiary)" }}>
+          No se encontraron productos en tu cuenta de MercadoLibre.
+        </div>
+      )}
     </div>
   );
 }
@@ -1506,6 +2130,7 @@ function App() {
   const [params, setParams] = useState(DEFAULT_PARAMS);
   const [showParams, setShowParams] = useState(false);
   const drive = useGoogleDrive();
+  const meli = useMercadoLibre(drive);
 
   useEffect(function() {
     if (drive.driveStatus === 'connected') drive.refreshCotizaciones();
@@ -1520,6 +2145,14 @@ function App() {
   };
   const ds = dsMap[drive.driveStatus] || dsMap.ready;
 
+  const mlStatusMap = {
+    disconnected: { text: 'Conectar MercadoLibre', css: 'disconnected' },
+    loading: { text: 'Conectando ML...', css: 'loading' },
+    connected: { text: meli.meliUser ? meli.meliUser.nickname : 'ML conectado', css: 'connected' },
+    error: { text: 'Error ML', css: 'disconnected' },
+  };
+  const ms = mlStatusMap[meli.meliStatus] || mlStatusMap.disconnected;
+
   return (
     <div style={{ minHeight: "100vh", background: "var(--color-background-tertiary)", fontFamily: "var(--font-sans)" }}>
       <div className="header-bar" style={{ background: "var(--color-background-primary)", borderBottom: "0.5px solid var(--color-border-tertiary)", padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 10 }}>
@@ -1528,6 +2161,20 @@ function App() {
           <div style={{ fontSize: 18, fontWeight: 500, color: "var(--color-text-primary)" }}>Centro de control &middot; Importaci&oacute;n & ML</div>
         </div>
         <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {/* MercadoLibre indicator */}
+          {meli.meliStatus === 'connected' ? (
+            <div className={'drive-indicator ' + ms.css} title={'Conectado como ' + (meli.meliUser ? meli.meliUser.nickname : '')}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--color-text-info)', display: 'inline-block' }} />
+              <span style={{ maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ms.text}</span>
+              <button onClick={meli.logout} style={{ fontSize: 10, padding: '1px 6px', background: 'transparent', border: '1px solid var(--color-border-info)', borderRadius: 100, color: 'var(--color-text-info)', cursor: 'pointer', fontFamily: 'inherit', marginLeft: 4 }}>salir</button>
+            </div>
+          ) : (
+            <div className={'drive-indicator ' + ms.css} onClick={meli.meliStatus === 'disconnected' ? meli.login : undefined} title={meli.meliStatus === 'disconnected' ? 'Haz clic para conectar MercadoLibre' : ''} style={{ cursor: meli.meliStatus === 'disconnected' ? 'pointer' : 'default' }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: meli.meliStatus === 'loading' ? 'var(--color-text-warning)' : 'var(--color-text-tertiary)', display: 'inline-block' }} />
+              <span>{ms.text}</span>
+            </div>
+          )}
+          {/* Google Drive indicator */}
           {drive.driveStatus === 'connected' ? (
             <div className={'drive-indicator ' + ds.css} title="Conectado a Google Drive">
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--color-text-success)', display: 'inline-block' }} />
@@ -1562,7 +2209,7 @@ function App() {
 
       <div className="content-area" style={{ padding: "20px 24px", maxWidth: 1100, margin: "0 auto" }}>
         {tab === "pricing" && <TabPricing params={params} setParams={setParams} drive={drive} />}
-        {tab === "dashboard" && <TabDashboard params={params} />}
+        {tab === "dashboard" && <TabDashboard params={params} drive={drive} meli={meli} />}
         {tab === "comparador" && <TabComparador params={params} />}
         {tab === "escalamiento" && <TabEscalamiento params={params} />}
         {tab === "publicidad" && <TabPublicidad params={params} />}

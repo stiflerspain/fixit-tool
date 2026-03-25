@@ -51,7 +51,18 @@ El archivo contiene CSS + JSX inline con los siguientes modulos:
 - Los parametros default estan en `DEFAULT_PARAMS`
 - Para agregar una pestana: agregar entrada en `TABS[]` y renderizar en `App()`
 
+## Integracion MercadoLibre API
+- **MeliService** — Modulo de autenticacion OAuth 2.0 con PKCE flow (sin backend). Ubicado despues de DriveService.
+- **useMercadoLibre hook** — Maneja estado de conexion ML, fetch de items/ordenes/envios/visitas por rango de fechas.
+- **MlMappingService** — Guarda/carga `ml-mappings.json` en Drive para asociar cotizaciones con productos ML.
+- **TabDashboard reemplazado** — Dashboard con datos reales de ML: selector de fechas (hoy/7d/30d/custom), 6 KPIs globales, cards por producto con metricas reales, selector de cotizaciones multi-select con costo ponderado.
+- **App ML Client ID**: `8682313366878154`
+- **Endpoints usados**: `/users/me`, `/users/{id}/items/search`, `/items?ids=`, `/orders/search`, `/shipments/{id}/costs`, `/items/visits`
+
 ## Changelog
+
+### 2026-03-25
+- **feat: integracion MercadoLibre API** — Nuevo modulo `MeliService` con OAuth PKCE, `useMercadoLibre` hook, dashboard con datos reales. Selector de fechas (hoy, 7 dias, 30 dias, personalizado). 6 KPIs globales + cards por producto con margen real. Selector de cotizaciones para asignar costo de importacion con calculo ponderado. Mappings guardados en Drive como `ml-mappings.json`. Indicador ML en header.
 
 ### 2026-03-23
 - **feat: restaurar parametros al cargar cotizacion** — `loadCotizacion()` ahora restaura `parametrosSnapshot` (USD/CLP, arancel, IVA, comisiones ML, margen) para saber exactamente como fue evaluada. `handleNew()` resetea a `DEFAULT_PARAMS`. Notificacion visual al restaurar.
