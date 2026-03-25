@@ -1586,6 +1586,7 @@ function TabDashboard({ params, drive, meli }) {
   const [customTo, setCustomTo] = useState('');
   const [pubGlobal, setPubGlobal] = useState(0);
   const [mappingItem, setMappingItem] = useState(null); // item id being mapped
+  const [hidePaused, setHidePaused] = useState(false);
 
   const getDateRange = () => {
     const now = new Date();
@@ -1752,7 +1753,11 @@ function TabDashboard({ params, drive, meli }) {
             </div>
           )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--color-text-secondary)", cursor: "pointer" }}>
+            <input type="checkbox" checked={hidePaused} onChange={e => setHidePaused(e.target.checked)} />
+            Ocultar pausadas
+          </label>
           <div style={S.mc}>
             <p style={{ ...S.label, marginBottom: 2 }}>Publicidad total</p>
             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -1789,7 +1794,10 @@ function TabDashboard({ params, drive, meli }) {
       {meli.loading && <div style={{ textAlign: "center", padding: 20, color: "var(--color-text-tertiary)" }}>&#8987; Cargando datos de MercadoLibre...</div>}
 
       {/* Product cards */}
-      {!meli.loading && meli.items.map(item => {
+      {!meli.loading && meli.items
+        .filter(item => !hidePaused || item.status === 'active')
+        .sort((a, b) => ((itemData[b.id] || {}).totalQty || 0) - ((itemData[a.id] || {}).totalQty || 0))
+        .map(item => {
         var d = itemData[item.id] || { totalQty: 0, totalRevenue: 0, totalFee: 0, totalShipping: 0 };
         var wc = getWeightedCost(item.id);
         var netoItem = d.totalRevenue - d.totalFee - d.totalShipping;
