@@ -1014,7 +1014,7 @@ function UsdClpField({ params, setParams }) {
           {manualMode && autoRate && (
             <button onClick={() => { setManualMode(false); setParams(p => ({ ...p, usdClp: autoRate })); }} style={{ fontSize: 10, padding: "1px 7px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, cursor: "pointer", color: "var(--color-text-secondary)", fontFamily: "inherit" }}>usar auto</button>
           )}
-          <button onClick={fetchRate} style={{ fontSize: 10, padding: "1px 7px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, cursor: "pointer", color: "var(--color-text-secondary)", fontFamily: "inherit" }}>&orarr;</button>
+          <button onClick={fetchRate} style={{ fontSize: 10, padding: "1px 7px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 100, cursor: "pointer", color: "var(--color-text-secondary)", fontFamily: "inherit" }}>{'\u21BB'}</button>
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1218,7 +1218,7 @@ function CotizacionesPanel({ open, onClose, cotizaciones, loadingCots, onSelect,
             <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>{cotizaciones.length} guardadas</div>
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
-            <button onClick={onRefresh} className="btn-cot btn-cot-neutral" title="Recargar">&orarr;</button>
+            <button onClick={onRefresh} className="btn-cot btn-cot-neutral" title="Recargar">{'\u21BB'}</button>
             <button onClick={onClose} className="btn-cot btn-cot-neutral">&times;</button>
           </div>
         </div>
@@ -1766,7 +1766,7 @@ function TabDashboard({ params, drive, meli }) {
             </div>
           </div>
           <button onClick={handleSync} disabled={meli.loading} style={{ ...btnStyle(false), display: "flex", alignItems: "center", gap: 4 }}>
-            {meli.loading ? '&#8987; Sincronizando...' : '&#8635; Sincronizar'}
+            {meli.loading ? '\u23F3 Sincronizando...' : '\u21BB Sincronizar'}
           </button>
           {meli.lastSync && <span style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>Sync: {meli.lastSync.toLocaleTimeString('es-CL')}</span>}
         </div>
