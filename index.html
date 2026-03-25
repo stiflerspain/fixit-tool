@@ -364,7 +364,8 @@ const DriveService = {
    MERCADOLIBRE — Credenciales y servicio API (PKCE flow)
    ================================================================ */
 const ML_CLIENT_ID = '8682313366878154';
-const ML_CLIENT_SECRET = ''; // TODO: pegar tu client_secret de ML aqui
+// Client secret ofuscado (XOR + key) — no es encriptacion real pero evita exposicion en texto plano
+const ML_CLIENT_SECRET = (function() { var k='FIXIT',e=[12,13,46,47,60,7,38,106,27,14,8,26,16,121,2,1,112,29,62,44,5,27,12,10,6,3,38,18,11,99,10,39]; return e.map(function(c,i){return String.fromCharCode(c^k.charCodeAt(i%k.length))}).join(''); })();
 const ML_REDIRECT_URI = window.location.origin + (window.location.pathname || '/');
 const ML_AUTH_URL = 'https://auth.mercadolibre.cl/authorization';
 const ML_TOKEN_URL = 'https://api.mercadolibre.com/oauth/token';
