@@ -1647,7 +1647,8 @@ function TabDashboard({ params, drive, meli }) {
       Object.keys(d.shipmentIds).forEach(sid => {
         var sc = meli.dashData.shipments[sid];
         if (sc) {
-          d.totalShipping += (sc.receiver && sc.receiver.cost || 0) - (sc.senders && sc.senders[0] && sc.senders[0].cost || 0);
+          // Solo contar lo que el vendedor realmente paga por envio (en envio gratis = 0)
+          d.totalShipping += (sc.senders && sc.senders[0] && sc.senders[0].cost) || 0;
         }
       });
     });
@@ -1772,7 +1773,7 @@ function TabDashboard({ params, drive, meli }) {
           { label: "Ventas totales", val: totalQty + " unid.", color: "primary" },
           { label: "Ingresos brutos", val: "$" + fmt(totalRevenue), color: "primary" },
           { label: "Comisiones ML", val: "$" + fmt(totalFees), color: "danger" },
-          { label: "Envio neto", val: "$" + fmt(totalShipping), color: totalShipping >= 0 ? "success" : "danger" },
+          { label: "Envio vendedor", val: "$" + fmt(totalShipping), color: totalShipping > 0 ? "danger" : "success", sub: totalShipping === 0 ? "Gratis" : "" },
           { label: "Neto total", val: "$" + fmt(totalNeto), color: totalNeto >= 0 ? "success" : "danger" },
           { label: "Margen promedio", val: avgMargin !== null ? pct(avgMargin) : "Sin datos", color: colorMargen(avgMargin), sub: avgMargin === null ? "Asigna cotizaciones" : "" },
         ].map(kpi => (
@@ -1861,7 +1862,7 @@ function TabDashboard({ params, drive, meli }) {
                 { label: "Vendidas", val: d.totalQty + "u", color: "primary" },
                 { label: "Ingresos", val: "$" + fmt(d.totalRevenue), color: "primary" },
                 { label: "Comision ML", val: "$" + fmt(d.totalFee), color: "danger" },
-                { label: "Envio neto", val: "$" + fmt(d.totalShipping), color: d.totalShipping >= 0 ? "success" : "danger" },
+                { label: "Envio vendedor", val: "$" + fmt(d.totalShipping), color: d.totalShipping > 0 ? "danger" : "success" },
                 { label: "Neto ML", val: "$" + fmt(netoItem), color: netoItem >= 0 ? "success" : "danger" },
                 { label: "Costo import.", val: costoImportTotal !== null ? "$" + fmt(costoImportTotal) : "\u2014", color: "secondary", sub: wc !== null ? "$" + fmt(wc) + "/u" : "Sin cotizacion" },
                 { label: "Publicidad", val: "$" + fmt(pubItem), color: pubItem > 0 ? "danger" : "secondary" },
