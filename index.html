@@ -364,6 +364,7 @@ const DriveService = {
    MERCADOLIBRE — Credenciales y servicio API (PKCE flow)
    ================================================================ */
 const ML_CLIENT_ID = '8682313366878154';
+const ML_CLIENT_SECRET = ''; // TODO: pegar tu client_secret de ML aqui
 const ML_REDIRECT_URI = window.location.origin + (window.location.pathname || '/');
 const ML_AUTH_URL = 'https://auth.mercadolibre.cl/authorization';
 const ML_TOKEN_URL = 'https://api.mercadolibre.com/oauth/token';
@@ -405,13 +406,15 @@ const MeliService = {
     if (!verifier) throw new Error('No code verifier found');
     sessionStorage.removeItem('ml_code_verifier');
 
-    const body = new URLSearchParams({
+    const bodyParams = {
       grant_type: 'authorization_code',
       client_id: ML_CLIENT_ID,
       code: code,
       redirect_uri: ML_REDIRECT_URI,
       code_verifier: verifier,
-    });
+    };
+    if (ML_CLIENT_SECRET) bodyParams.client_secret = ML_CLIENT_SECRET;
+    const body = new URLSearchParams(bodyParams);
 
     const resp = await fetch(ML_TOKEN_URL, {
       method: 'POST',
@@ -429,11 +432,13 @@ const MeliService = {
 
   async refreshToken() {
     if (!MeliService.refreshTokenValue) throw new Error('No refresh token');
-    const body = new URLSearchParams({
+    const bodyParams = {
       grant_type: 'refresh_token',
       client_id: ML_CLIENT_ID,
       refresh_token: MeliService.refreshTokenValue,
-    });
+    };
+    if (ML_CLIENT_SECRET) bodyParams.client_secret = ML_CLIENT_SECRET;
+    const body = new URLSearchParams(bodyParams);
     const resp = await fetch(ML_TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
@@ -770,8 +775,9 @@ function useMercadoLibre(drive) {
           setMeliUser({ id: user.id, nickname: user.nickname });
           setMeliStatus('connected');
         } catch (e) {
-          console.error('ML auth error:', e);
+          console.error('ML auth error:', e.message, e);
           setMeliStatus('error');
+          window._mlAuthError = e.message;
         }
         return;
       }
@@ -1724,7 +1730,7 @@ function TabDashboard({ params, drive, meli }) {
         <button onClick={meli.login} style={{ ...btnStyle(true), fontSize: 14, padding: "10px 24px" }}>
           {meli.meliStatus === 'loading' ? 'Conectando...' : 'Conectar MercadoLibre'}
         </button>
-        {meli.meliStatus === 'error' && <p style={{ color: "var(--color-text-danger)", marginTop: 12, fontSize: 13 }}>Error de conexion. Intenta nuevamente.</p>}
+        {meli.meliStatus === 'error' && <p style={{ color: "var(--color-text-danger)", marginTop: 12, fontSize: 13 }}>Error: {window._mlAuthError || 'Error de conexion'}. Intenta nuevamente.</p>}
       </div>
     );
   }
