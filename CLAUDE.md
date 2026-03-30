@@ -28,7 +28,7 @@ El archivo contiene CSS + JSX inline con los siguientes modulos:
 
 ### Integracion Google Drive
 - Usa Google Drive API con OAuth 2.0 para guardar/cargar cotizaciones
-- Scope restringido: `drive.file` (solo archivos creados por la app)
+- Scope: `drive` (acceso completo, necesario para compartir entre socios)
 - Carpeta compartida entre socios para datos sincronizados
 - Credenciales OAuth configuradas en Google Cloud Console
 
@@ -63,6 +63,9 @@ El archivo contiene CSS + JSX inline con los siguientes modulos:
 - **Envio**: solo se cuenta `senders[0].cost` (costo real del vendedor). Envio gratis = $0.
 
 ## Changelog
+
+### 2026-03-30
+- **fix: scope Drive para sincronizar entre socios** — Cambiado scope OAuth de `drive.file` a `drive`. El scope anterior solo permitia acceder a archivos creados por la propia app de cada usuario, impidiendo ver la carpeta compartida. Scope `drive` tambien agregado en Google Cloud Console como permiso restringido.
 
 ### 2026-03-25
 - **feat: integracion MercadoLibre API** — Nuevo modulo `MeliService` con OAuth PKCE + client_secret ofuscado, `useMercadoLibre` hook, dashboard con datos reales. Selector de fechas (hoy, 7 dias, 30 dias, personalizado). 6 KPIs globales + cards por producto con margen real. Selector de cotizaciones multi-select para asignar costo de importacion con calculo ponderado. Mappings guardados en Drive como `ml-mappings.json`. Indicador ML en header.
