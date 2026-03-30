@@ -23,7 +23,7 @@
          https://stiflerspain.github.io/fixit-tool/
   7. Configurar la pantalla de consentimiento OAuth:
      - Tipo de usuario: Externo
-     - Agregar scope: https://www.googleapis.com/auth/drive.file
+     - Agregar scope: https://www.googleapis.com/auth/drive
      - Agregar los emails de prueba (tu cuenta y la del socio)
      - Publicar la app cuando este lista (o dejar en testing)
   8. Copiar el CLIENT_ID y API_KEY en las constantes del codigo:
@@ -36,12 +36,12 @@
      - Ahora ambos ven y editan las mismas cotizaciones
 
   NOTA DE SEGURIDAD:
-  - El scope drive.file solo permite acceder a archivos creados
-    por esta app. No tiene acceso al resto del Drive.
+  - El scope drive da acceso completo a Google Drive, pero la app
+    solo opera dentro de la carpeta FIXIT-Data.
+  - Este scope es necesario para que ambos socios vean los mismos
+    archivos cuando la carpeta esta compartida.
   - Los tokens se guardan en sessionStorage (se borran al cerrar
     la pestana).
-  - Si un tercero entra y se loguea, solo vera su propia carpeta
-    vacia. No tiene acceso a datos de otros usuarios.
   ============================================================================
 -->
 <!DOCTYPE html>
@@ -151,7 +151,7 @@ const { useState, useCallback, useEffect, useRef } = React;
    ================================================================ */
 const GOOGLE_CLIENT_ID = '656434596202-bm95e2b1voq65ni9slkrdenjqjqplsdj.apps.googleusercontent.com';
 const GOOGLE_API_KEY = 'AIzaSyCyWD0-xjpNXX_hgJZ3dt1x_X2OS1BxhzY';
-const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file';
+const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive';
 const FIXIT_FOLDER_NAME = 'FIXIT-Data';
 const COT_FOLDER_NAME = 'cotizaciones';
 const FAC_FOLDER_NAME = 'facturas';
