@@ -50,9 +50,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FIXIT SPA &middot; Centro de control</title>
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Versiones FIJAS a proposito: estos CDN se servian sin pin (@18, @babel/standalone)
+       y el dia que salio Babel 8 su preset-react paso a runtime "automatic" (genera
+       `import {jsx} from "react/jsx-runtime"`), que es ilegal en un <script> clasico y
+       dejaba la pagina en blanco. NO quitar las versiones. -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
   <script src="https://apis.google.com/js/api.js" async defer></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>

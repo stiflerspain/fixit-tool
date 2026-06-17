@@ -64,6 +64,9 @@ El archivo contiene CSS + JSX inline con los siguientes modulos:
 
 ## Changelog
 
+### 2026-06-16
+- **fix: pagina en blanco por Babel 8 (CDN sin pin)** — La pagina dejo de renderizar sin que se tocara el repo. Causa: los `<script>` de React y Babel apuntaban a CDN sin version fija (`@18`, `@babel/standalone`). Al publicarse Babel 8, `unpkg` empezo a servirlo y su `preset-react` cambio el runtime por defecto de `classic` a `automatic`, generando `import { jsx } from "react/jsx-runtime"`. Babel standalone ejecuta el codigo inline como script clasico → `SyntaxError: Cannot use import statement outside a module` → el script abortaba y `#root` quedaba vacio. Solucion: fijar versiones — `react@18.3.1`, `react-dom@18.3.1`, `@babel/standalone@7.26.4`. Lección: nunca cargar dependencias CDN sin pin en una app standalone.
+
 ### 2026-03-30
 - **fix: scope Drive para sincronizar entre socios** — Cambiado scope OAuth de `drive.file` a `drive`. El scope anterior solo permitia acceder a archivos creados por la propia app de cada usuario, impidiendo ver la carpeta compartida. Scope `drive` tambien agregado en Google Cloud Console como permiso restringido.
 
